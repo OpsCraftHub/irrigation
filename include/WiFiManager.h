@@ -25,6 +25,7 @@ public:
 
     // Set controller reference for status page
     void setController(class IrrigationController* controller) { _controller = controller; }
+    void setHomeAssistant(class HomeAssistantIntegration* ha) { _homeAssistant = ha; }
 
     // Main update loop
     void update();
@@ -99,6 +100,7 @@ private:
 
     // Controller reference for status page
     class IrrigationController* _controller;
+    class HomeAssistantIntegration* _homeAssistant;
 };
 
 #endif // WIFI_MANAGER_H

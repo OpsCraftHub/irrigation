@@ -28,10 +28,24 @@ bool HomeAssistantIntegration::begin(const char* broker, uint16_t port,
                                      const char* user, const char* password) {
     DEBUG_PRINTLN("HomeAssistant: Initializing...");
 
-    _broker = String(broker);
-    _port = port;
-    _user = user ? String(user) : "";
-    _password = password ? String(password) : "";
+    // Try to load saved credentials first
+    bool hasCredentials = false;
+    if (broker != nullptr) {
+        // Use provided credentials
+        _broker = String(broker);
+        _port = port;
+        _user = user ? String(user) : "";
+        _password = password ? String(password) : "";
+        hasCredentials = true;
+    } else {
+        // Try to load from SPIFFS
+        hasCredentials = loadCredentials();
+    }
+
+    if (!hasCredentials || _broker.length() == 0) {
+        DEBUG_PRINTLN("HomeAssistant: No MQTT credentials configured");
+        return false;
+    }
 
     // Create WiFi client and MQTT client
     _wifiClient = new WiFiClient();
@@ -47,6 +61,91 @@ bool HomeAssistantIntegration::begin(const char* broker, uint16_t port,
 
     DEBUG_PRINTLN("HomeAssistant: Initialized");
     return true;
+}
+
+bool HomeAssistantIntegration::loadCredentials() {
+    if (!SPIFFS.exists(MQTT_CREDENTIALS_FILE)) {
+        DEBUG_PRINTLN("HomeAssistant: No credentials file found");
+        return false;
+    }
+
+    File file = SPIFFS.open(MQTT_CREDENTIALS_FILE, "r");
+    if (!file) {
+        DEBUG_PRINTLN("HomeAssistant: Failed to open credentials file");
+        return false;
+    }
+
+    StaticJsonDocument<512> doc;
+    DeserializationError error = deserializeJson(doc, file);
+    file.close();
+
+    if (error) {
+        DEBUG_PRINTF("HomeAssistant: Failed to parse credentials: %s\n", error.c_str());
+        return false;
+    }
+
+    _broker = doc["broker"] | "";
+    _port = doc["port"] | 1883;
+    _user = doc["user"] | "";
+    _password = doc["password"] | "";
+
+    if (_broker.length() > 0) {
+        DEBUG_PRINTF("HomeAssistant: Loaded credentials for broker: %s\n", _broker.c_str());
+        return true;
+    }
+
+    return false;
+}
+
+bool HomeAssistantIntegration::saveCredentials(const String& broker, uint16_t port,
+                                                const String& user, const String& password) {
+    StaticJsonDocument<512> doc;
+    doc["broker"] = broker;
+    doc["port"] = port;
+    doc["user"] = user;
+    doc["password"] = password;
+
+    File file = SPIFFS.open(MQTT_CREDENTIALS_FILE, "w");
+    if (!file) {
+        DEBUG_PRINTLN("HomeAssistant: Failed to open credentials file for writing");
+        return false;
+    }
+
+    if (serializeJson(doc, file) == 0) {
+        DEBUG_PRINTLN("HomeAssistant: Failed to write credentials");
+        file.close();
+        return false;
+    }
+
+    file.close();
+    DEBUG_PRINTLN("HomeAssistant: Credentials saved successfully");
+    return true;
+}
+
+bool HomeAssistantIntegration::testConnection(const String& broker, uint16_t port,
+                                               const String& user, const String& password) {
+    DEBUG_PRINTF("HomeAssistant: Testing connection to %s:%d\n", broker.c_str(), port);
+
+    WiFiClient testClient;
+    PubSubClient testMqtt(testClient);
+
+    testMqtt.setServer(broker.c_str(), port);
+
+    bool connected = false;
+    if (user.length() > 0) {
+        connected = testMqtt.connect("irrigation_test", user.c_str(), password.c_str());
+    } else {
+        connected = testMqtt.connect("irrigation_test");
+    }
+
+    if (connected) {
+        DEBUG_PRINTLN("HomeAssistant: Test connection successful");
+        testMqtt.disconnect();
+        return true;
+    } else {
+        DEBUG_PRINTF("HomeAssistant: Test connection failed, state: %d\n", testMqtt.state());
+        return false;
+    }
 }
 
 void HomeAssistantIntegration::connectMQTT() {

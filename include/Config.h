@@ -62,16 +62,17 @@
 #define WIFI_AP_PASSWORD ""                 // Leave empty for open network
 #define WIFI_CONFIG_PORTAL_TIMEOUT 300000   // 5 minutes timeout
 #define WIFI_CREDENTIALS_FILE "/wifi_creds.json"
+#define MQTT_CREDENTIALS_FILE "/mqtt_creds.json"
 #define DNS_PORT 53
 
 // ============================================================================
 // MQTT SETTINGS (Home Assistant)
 // ============================================================================
 
-#define MQTT_BROKER "192.168.1.100"    // Your Home Assistant IP
+#define MQTT_BROKER "home.hackster.me"    // Your Home Assistant hostname
 #define MQTT_PORT 1883
-#define MQTT_USER "mqtt_user"          // MQTT username (leave empty if no auth)
-#define MQTT_PASSWORD "mqtt_password"  // MQTT password
+#define MQTT_USER ""                      // MQTT username (UPDATE THIS)
+#define MQTT_PASSWORD ""                  // MQTT password (UPDATE THIS)
 #define MQTT_CLIENT_ID "irrigation_esp32"
 #define MQTT_BASE_TOPIC "homeassistant/switch/irrigation"
 #define MQTT_RECONNECT_INTERVAL 5000   // Retry every 5 seconds

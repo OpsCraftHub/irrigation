@@ -1,5 +1,6 @@
 #include "WiFiManager.h"
 #include "IrrigationController.h"
+#include "HomeAssistantIntegration.h"
 
 WiFiManager::WiFiManager()
     : _timeSynced(false),
@@ -13,7 +14,8 @@ WiFiManager::WiFiManager()
       _webServer(nullptr),
       _dnsServer(nullptr),
       _timeUpdateCallback(nullptr),
-      _controller(nullptr) {
+      _controller(nullptr),
+      _homeAssistant(nullptr) {
 }
 
 WiFiManager::~WiFiManager() {
@@ -1002,9 +1004,130 @@ String WiFiManager::getStatusPage() {
     char uptimeBuf[30];
     sprintf(uptimeBuf, "%02luh %02lum %02lus", hours, minutes, seconds);
     page += uptimeBuf;
-    
+
     page += R"rawliteral(
         </div>
+)rawliteral";
+
+    // Add MQTT configuration form if not connected
+    bool mqttConnected = _homeAssistant && _homeAssistant->isConnected();
+    if (!mqttConnected) {
+        String mqttBroker = _homeAssistant ? _homeAssistant->getMqttBroker() : "";
+        uint16_t mqttPort = _homeAssistant ? _homeAssistant->getMqttPort() : 1883;
+        String mqttUser = _homeAssistant ? _homeAssistant->getMqttUser() : "";
+
+        page += R"rawliteral(
+        <div class="info" style="background: rgba(255,165,0,0.2); border-left: 4px solid #ff8800;">
+            <h2 style="margin-top:0; color:#ff8800;">⚠️ MQTT Not Connected</h2>
+            <form id="mqttForm" style="text-align:left;">
+                <label style="display:block; margin-top:10px;"><strong>Broker:</strong></label>
+                <input type="text" id="broker" name="broker" value=")rawliteral";
+        page += mqttBroker;
+        page += R"rawliteral(" placeholder="home.hackster.me or 192.168.0.X" style="width:100%; padding:8px; margin-top:5px; border:1px solid #0f0; background:#0a0a0a; color:#0f0; font-family:'Courier New';">
+
+                <label style="display:block; margin-top:10px;"><strong>Port:</strong></label>
+                <input type="number" id="port" name="port" value=")rawliteral";
+        page += String(mqttPort);
+        page += R"rawliteral(" style="width:100%; padding:8px; margin-top:5px; border:1px solid #0f0; background:#0a0a0a; color:#0f0; font-family:'Courier New';">
+
+                <label style="display:block; margin-top:10px;"><strong>Username (optional):</strong></label>
+                <input type="text" id="user" name="user" value=")rawliteral";
+        page += mqttUser;
+        page += R"rawliteral(" placeholder="Leave empty if no auth" style="width:100%; padding:8px; margin-top:5px; border:1px solid #0f0; background:#0a0a0a; color:#0f0; font-family:'Courier New';">
+
+                <label style="display:block; margin-top:10px;"><strong>Password (optional):</strong></label>
+                <input type="password" id="password" name="password" placeholder="Leave empty if no auth" style="width:100%; padding:8px; margin-top:5px; border:1px solid #0f0; background:#0a0a0a; color:#0f0; font-family:'Courier New';">
+
+                <div style="margin-top:15px;">
+                    <button type="button" onclick="testMqtt()" style="padding:10px 20px; background:#48bb78; color:#fff; border:none; border-radius:5px; cursor:pointer; margin-right:10px;">🔍 Test Connection</button>
+                    <button type="button" onclick="saveMqtt()" style="padding:10px 20px; background:#667eea; color:#fff; border:none; border-radius:5px; cursor:pointer;">💾 Save & Restart</button>
+                </div>
+                <div id="mqttMessage" style="margin-top:10px; padding:10px; border-radius:5px; display:none;"></div>
+            </form>
+        </div>
+
+        <script>
+        function testMqtt() {
+            var broker = document.getElementById('broker').value;
+            var port = document.getElementById('port').value;
+            var user = document.getElementById('user').value;
+            var password = document.getElementById('password').value;
+
+            var msg = document.getElementById('mqttMessage');
+            msg.style.display = 'block';
+            msg.style.background = 'rgba(255,255,0,0.2)';
+            msg.style.color = '#ff0';
+            msg.innerHTML = '⏳ Testing connection...';
+
+            fetch('/mqtt/test', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+                body: 'broker=' + encodeURIComponent(broker) + '&port=' + port + '&user=' + encodeURIComponent(user) + '&password=' + encodeURIComponent(password)
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    msg.style.background = 'rgba(0,255,0,0.2)';
+                    msg.style.color = '#0f0';
+                    msg.innerHTML = '✓ ' + data.message;
+                } else {
+                    msg.style.background = 'rgba(255,0,0,0.2)';
+                    msg.style.color = '#f00';
+                    msg.innerHTML = '✗ ' + data.message;
+                }
+            })
+            .catch(error => {
+                msg.style.background = 'rgba(255,0,0,0.2)';
+                msg.style.color = '#f00';
+                msg.innerHTML = '✗ Error: ' + error;
+            });
+        }
+
+        function saveMqtt() {
+            var broker = document.getElementById('broker').value;
+            if (!broker) {
+                alert('Broker is required');
+                return;
+            }
+
+            var port = document.getElementById('port').value;
+            var user = document.getElementById('user').value;
+            var password = document.getElementById('password').value;
+
+            var msg = document.getElementById('mqttMessage');
+            msg.style.display = 'block';
+            msg.style.background = 'rgba(255,255,0,0.2)';
+            msg.style.color = '#ff0';
+            msg.innerHTML = '⏳ Saving...';
+
+            fetch('/mqtt/save', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+                body: 'broker=' + encodeURIComponent(broker) + '&port=' + port + '&user=' + encodeURIComponent(user) + '&password=' + encodeURIComponent(password)
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    msg.style.background = 'rgba(0,255,0,0.2)';
+                    msg.style.color = '#0f0';
+                    msg.innerHTML = '✓ ' + data.message;
+                } else {
+                    msg.style.background = 'rgba(255,0,0,0.2)';
+                    msg.style.color = '#f00';
+                    msg.innerHTML = '✗ ' + data.message;
+                }
+            })
+            .catch(error => {
+                msg.style.background = 'rgba(255,0,0,0.2)';
+                msg.style.color = '#f00';
+                msg.innerHTML = '✗ Error: ' + error;
+            });
+        }
+        </script>
+)rawliteral";
+    }
+
+    page += R"rawliteral(
     </div>
 </body>
 </html>)rawliteral";
@@ -1022,6 +1145,59 @@ void WiFiManager::startWebServer() {
     // Status page (root)
     _webServer->on("/", HTTP_GET, [this]() {
         _webServer->send(200, "text/html", getStatusPage());
+    });
+
+    // MQTT configuration save
+    _webServer->on("/mqtt/save", HTTP_POST, [this]() {
+        if (!_homeAssistant) {
+            _webServer->send(500, "text/plain", "MQTT not initialized");
+            return;
+        }
+
+        String broker = _webServer->hasArg("broker") ? _webServer->arg("broker") : "";
+        uint16_t port = _webServer->hasArg("port") ? _webServer->arg("port").toInt() : 1883;
+        String user = _webServer->hasArg("user") ? _webServer->arg("user") : "";
+        String password = _webServer->hasArg("password") ? _webServer->arg("password") : "";
+
+        if (broker.length() == 0) {
+            _webServer->send(400, "application/json", "{\"success\":false,\"message\":\"Broker required\"}");
+            return;
+        }
+
+        // Save credentials
+        if (_homeAssistant->saveCredentials(broker, port, user, password)) {
+            _webServer->send(200, "application/json", "{\"success\":true,\"message\":\"Saved. Restarting...\"}");
+            delay(2000);
+            ESP.restart();
+        } else {
+            _webServer->send(500, "application/json", "{\"success\":false,\"message\":\"Failed to save\"}");
+        }
+    });
+
+    // MQTT test connection
+    _webServer->on("/mqtt/test", HTTP_POST, [this]() {
+        if (!_homeAssistant) {
+            _webServer->send(500, "application/json", "{\"success\":false,\"message\":\"MQTT not initialized\"}");
+            return;
+        }
+
+        String broker = _webServer->hasArg("broker") ? _webServer->arg("broker") : "";
+        uint16_t port = _webServer->hasArg("port") ? _webServer->arg("port").toInt() : 1883;
+        String user = _webServer->hasArg("user") ? _webServer->arg("user") : "";
+        String password = _webServer->hasArg("password") ? _webServer->arg("password") : "";
+
+        if (broker.length() == 0) {
+            _webServer->send(400, "application/json", "{\"success\":false,\"message\":\"Broker required\"}");
+            return;
+        }
+
+        // Test connection
+        bool success = _homeAssistant->testConnection(broker, port, user, password);
+        if (success) {
+            _webServer->send(200, "application/json", "{\"success\":true,\"message\":\"Connection successful!\"}");
+        } else {
+            _webServer->send(200, "application/json", "{\"success\":false,\"message\":\"Connection failed\"}");
+        }
     });
 
     _webServer->begin();

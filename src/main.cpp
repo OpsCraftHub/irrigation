@@ -73,10 +73,16 @@ void setup() {
         delay(1000);
     }
 
+    // Initialize Home Assistant integration (before WiFiManager so it can load MQTT creds)
+    DEBUG_PRINTLN("Initializing Home Assistant Integration...");
+    homeAssistant = new HomeAssistantIntegration(irrigationController);
+    homeAssistant->begin(); // Will load credentials from SPIFFS or fail gracefully
+
     // Initialize WiFi manager
     DEBUG_PRINTLN("Initializing WiFi Manager...");
     wifiManager = new WiFiManager();
     wifiManager->setController(irrigationController);
+    wifiManager->setHomeAssistant(homeAssistant); // For MQTT config in web UI
 
     // Try to connect with saved credentials or start config portal
     if (!wifiManager->begin()) {
@@ -88,13 +94,6 @@ void setup() {
 
     // Set time update callback
     wifiManager->setTimeUpdateCallback(timeUpdateCallback);
-
-    // Initialize Home Assistant integration
-    DEBUG_PRINTLN("Initializing Home Assistant Integration...");
-    homeAssistant = new HomeAssistantIntegration(irrigationController);
-    if (!homeAssistant->begin(MQTT_BROKER, MQTT_PORT, MQTT_USER, MQTT_PASSWORD)) {
-        DEBUG_PRINTLN("ERROR: Failed to initialize HomeAssistant!");
-    }
 
     // Add some default schedules for testing (optional)
     // Schedule 1: Every day at 6:00 AM for 30 minutes

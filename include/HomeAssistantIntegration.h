@@ -5,6 +5,7 @@
 #include <PubSubClient.h>
 #include <WiFi.h>
 #include <ArduinoJson.h>
+#include <SPIFFS.h>
 #include "Config.h"
 #include "IrrigationController.h"
 
@@ -14,8 +15,18 @@ public:
     ~HomeAssistantIntegration();
 
     // Initialization
-    bool begin(const char* broker, uint16_t port,
+    bool begin(const char* broker = nullptr, uint16_t port = 1883,
                const char* user = nullptr, const char* password = nullptr);
+
+    // MQTT credentials management
+    bool loadCredentials();
+    bool saveCredentials(const String& broker, uint16_t port, const String& user, const String& password);
+    bool testConnection(const String& broker, uint16_t port, const String& user, const String& password);
+
+    // Get current config
+    String getMqttBroker() const { return _broker; }
+    uint16_t getMqttPort() const { return _port; }
+    String getMqttUser() const { return _user; }
 
     // Main update loop
     void update();
