@@ -1,0 +1,27 @@
+{
+  "wifi": {
+    "ssid": "YourWiFiSSID",
+    "password": "YourWiFiPassword",
+    "hostname": "irrigation-esp32"
+  },
+  "mqtt": {
+    "broker": "192.168.1.100",
+    "port": 1883,
+    "user": "mqtt_user",
+    "password": "mqtt_password"
+  },
+  "ntp": {
+    "server": "pool.ntp.org",
+    "timezone_offset": -8,
+    "daylight_offset": 3600
+  },
+  "github": {
+    "repo_owner": "yourusername",
+    "repo_name": "irrigation-controller",
+    "check_interval": 86400000
+  },
+  "system": {
+    "safety_timeout_minutes": 300,
+    "default_duration_minutes": 30
+  }
+}

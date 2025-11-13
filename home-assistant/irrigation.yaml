@@ -1,0 +1,172 @@
+# Home Assistant Configuration for ESP32 Irrigation Controller
+# Add this to your configuration.yaml or include it as a package
+
+# MQTT Configuration (if not already configured)
+mqtt:
+  broker: 192.168.1.100
+  port: 1883
+  username: mqtt_user
+  password: mqtt_password
+  discovery: true
+  discovery_prefix: homeassistant
+
+# Input Number for Duration Control (Optional - created via MQTT discovery)
+# input_number:
+#   irrigation_duration:
+#     name: Irrigation Duration
+#     min: 1
+#     max: 240
+#     step: 5
+#     unit_of_measurement: minutes
+#     icon: mdi:timer
+
+# Automation Examples
+
+automation:
+  # Notify when irrigation starts
+  - alias: "Irrigation Started Notification"
+    trigger:
+      - platform: state
+        entity_id: switch.irrigation_controller
+        to: "on"
+    action:
+      - service: notify.notify
+        data:
+          title: "🌱 Irrigation Started"
+          message: "The irrigation system has started watering."
+
+  # Notify when irrigation completes
+  - alias: "Irrigation Completed Notification"
+    trigger:
+      - platform: state
+        entity_id: switch.irrigation_controller
+        to: "off"
+    action:
+      - service: notify.notify
+        data:
+          title: "✅ Irrigation Complete"
+          message: "The irrigation cycle has completed."
+
+  # Emergency stop if rain detected
+  - alias: "Stop Irrigation on Rain"
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.rain_sensor  # Replace with your rain sensor
+        to: "on"
+    condition:
+      - condition: state
+        entity_id: switch.irrigation_controller
+        state: "on"
+    action:
+      - service: switch.turn_off
+        entity_id: switch.irrigation_controller
+      - service: notify.notify
+        data:
+          title: "🌧️ Irrigation Stopped"
+          message: "Irrigation stopped due to rain detection."
+
+  # Don't irrigate if it rained recently
+  - alias: "Skip Irrigation After Rain"
+    trigger:
+      - platform: state
+        entity_id: switch.irrigation_controller
+        to: "on"
+    condition:
+      - condition: state
+        entity_id: binary_sensor.rain_sensor
+        state: "on"
+    action:
+      - service: switch.turn_off
+        entity_id: switch.irrigation_controller
+
+# Template Sensors for Enhanced Information
+
+template:
+  - sensor:
+      - name: "Irrigation Status"
+        state: >
+          {% if is_state('switch.irrigation_controller', 'on') %}
+            Irrigating
+          {% else %}
+            Idle
+          {% endif %}
+        icon: >
+          {% if is_state('switch.irrigation_controller', 'on') %}
+            mdi:water-pump
+          {% else %}
+            mdi:water-pump-off
+          {% endif %}
+
+      - name: "Irrigation Time Remaining"
+        state: >
+          {% set status = state_attr('sensor.irrigation_controller_status', 'time_remaining') %}
+          {% if status %}
+            {{ status }}
+          {% else %}
+            0
+          {% endif %}
+        unit_of_measurement: "min"
+        icon: mdi:timer-sand
+
+      - name: "Next Irrigation"
+        state: >
+          {% set next = state_attr('sensor.irrigation_controller_status', 'next_scheduled') %}
+          {% if next %}
+            {{ as_timestamp(next) | timestamp_custom('%Y-%m-%d %H:%M') }}
+          {% else %}
+            Not scheduled
+          {% endif %}
+        icon: mdi:calendar-clock
+
+# Lovelace Dashboard Card Example
+
+# type: vertical-stack
+# cards:
+#   - type: entities
+#     title: Irrigation Controller
+#     entities:
+#       - entity: switch.irrigation_controller
+#         name: Irrigation Control
+#       - entity: sensor.irrigation_status
+#         name: Status
+#       - entity: sensor.irrigation_time_remaining
+#         name: Time Remaining
+#       - entity: sensor.next_irrigation
+#         name: Next Scheduled
+#       - entity: number.irrigation_controller_duration
+#         name: Duration
+#
+#   - type: history-graph
+#     title: Irrigation History
+#     hours_to_show: 168
+#     entities:
+#       - entity: switch.irrigation_controller
+
+# Scripts for Manual Control
+
+script:
+  irrigation_quick_start:
+    alias: "Quick Start Irrigation"
+    sequence:
+      - service: switch.turn_on
+        entity_id: switch.irrigation_controller
+
+  irrigation_stop:
+    alias: "Stop Irrigation"
+    sequence:
+      - service: switch.turn_off
+        entity_id: switch.irrigation_controller
+
+  irrigation_custom_duration:
+    alias: "Start Irrigation with Custom Duration"
+    fields:
+      duration:
+        description: "Duration in minutes"
+        example: 30
+    sequence:
+      - service: number.set_value
+        data:
+          entity_id: number.irrigation_controller_duration
+          value: "{{ duration }}"
+      - service: switch.turn_on
+        entity_id: switch.irrigation_controller
