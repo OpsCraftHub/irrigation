@@ -29,9 +29,14 @@ IrrigationController::~IrrigationController() {
 bool IrrigationController::begin() {
     DEBUG_PRINTLN("IrrigationController: Initializing...");
 
-    // Configure valve pin
-    pinMode(VALVE_PIN, OUTPUT);
-    digitalWrite(VALVE_PIN, LOW);
+    // Configure all channel pins
+    for (uint8_t i = 0; i < MAX_CHANNELS; i++) {
+        pinMode(CHANNEL_PINS[i], OUTPUT);
+        digitalWrite(CHANNEL_PINS[i], LOW);
+        _status.channelIrrigating[i] = false;
+        _status.channelStartTime[i] = 0;
+        _status.channelDuration[i] = 0;
+    }
 
     // Initialize SPIFFS for storage
     if (!SPIFFS.begin(true)) {
@@ -67,7 +72,13 @@ void IrrigationController::update() {
     }
 }
 
-void IrrigationController::startIrrigation(uint16_t durationMinutes) {
+void IrrigationController::startIrrigation(uint8_t channel, uint16_t durationMinutes) {
+    // Validate channel
+    if (channel < 1 || channel > MAX_CHANNELS) {
+        DEBUG_PRINTF("Invalid channel: %d\n", channel);
+        return;
+    }
+
     // Validate duration
     if (durationMinutes < MIN_DURATION_MINUTES) {
         durationMinutes = MIN_DURATION_MINUTES;
@@ -76,31 +87,65 @@ void IrrigationController::startIrrigation(uint16_t durationMinutes) {
         durationMinutes = MAX_DURATION_MINUTES;
     }
 
-    DEBUG_PRINTF("IrrigationController: Starting irrigation for %d minutes\n", durationMinutes);
+    DEBUG_PRINTF("IrrigationController: Starting irrigation on channel %d for %d minutes\n", channel, durationMinutes);
 
+    uint8_t idx = channel - 1;  // Convert to 0-based index
+
+    _status.channelIrrigating[idx] = true;
+    _status.channelStartTime[idx] = millis();
+    _status.channelDuration[idx] = durationMinutes;
     _status.irrigating = true;
     _status.irrigationStartTime = _currentTime;
     _irrigationStartMillis = millis();
     _currentDurationMinutes = durationMinutes;
     _status.currentDuration = durationMinutes;
 
-    activateValve(true);
+    activateValve(channel, true);
 }
 
-void IrrigationController::stopIrrigation() {
-    if (!_status.irrigating) {
-        return;
+void IrrigationController::stopIrrigation(uint8_t channel) {
+    if (channel == 0) {
+        // Stop all channels
+        DEBUG_PRINTLN("IrrigationController: Stopping all channels");
+        for (uint8_t i = 0; i < MAX_CHANNELS; i++) {
+            if (_status.channelIrrigating[i]) {
+                _status.channelIrrigating[i] = false;
+                _status.channelStartTime[i] = 0;
+                _status.channelDuration[i] = 0;
+                activateValve(i + 1, false);
+            }
+        }
+        _status.irrigating = false;
+        _status.manualMode = false;
+        _currentDurationMinutes = 0;
+        _status.currentDuration = 0;
+    } else if (channel >= 1 && channel <= MAX_CHANNELS) {
+        // Stop specific channel
+        DEBUG_PRINTF("IrrigationController: Stopping channel %d\n", channel);
+        uint8_t idx = channel - 1;
+        _status.channelIrrigating[idx] = false;
+        _status.channelStartTime[idx] = 0;
+        _status.channelDuration[idx] = 0;
+        activateValve(channel, false);
+
+        // Update global status - check if any channel is still running
+        bool anyActive = false;
+        for (uint8_t i = 0; i < MAX_CHANNELS; i++) {
+            if (_status.channelIrrigating[i]) {
+                anyActive = true;
+                break;
+            }
+        }
+        _status.irrigating = anyActive;
+
+        if (!anyActive) {
+            _status.manualMode = false;
+            _currentDurationMinutes = 0;
+            _status.currentDuration = 0;
+        }
     }
 
-    DEBUG_PRINTLN("IrrigationController: Stopping irrigation");
-
-    _status.irrigating = false;
-    _status.manualMode = false;
     _status.lastIrrigationTime = _currentTime;
-    _currentDurationMinutes = 0;
-    _status.currentDuration = 0;
-
-    activateValve(false);
 }
 
 void IrrigationController::updateIrrigationState() {
@@ -137,9 +182,17 @@ void IrrigationController::checkSchedules() {
 
     for (int i = 0; i < MAX_SCHEDULES; i++) {
         if (_schedules[i].enabled && shouldRunSchedule(_schedules[i], now)) {
-            DEBUG_PRINTF("IrrigationController: Schedule %d triggered\n", i);
-            startIrrigation(_schedules[i].durationMinutes);
-            break; // Only run one schedule at a time
+            uint8_t channel = _schedules[i].channel;
+
+            // Don't start if this channel is already running
+            if (isChannelIrrigating(channel)) {
+                DEBUG_PRINTF("IrrigationController: Schedule %d skipped - channel %d already running\n", i, channel);
+                continue;
+            }
+
+            DEBUG_PRINTF("IrrigationController: Schedule %d triggered for channel %d\n", i, channel);
+            startIrrigation(channel, _schedules[i].durationMinutes);
+            // Note: Don't break - allow multiple channels to run simultaneously
         }
     }
 }
@@ -176,9 +229,45 @@ bool IrrigationController::shouldRunSchedule(const IrrigationSchedule& schedule,
     return true;
 }
 
-void IrrigationController::activateValve(bool state) {
-    digitalWrite(VALVE_PIN, state ? HIGH : LOW);
-    DEBUG_PRINTF("IrrigationController: Valve %s\n", state ? "ON" : "OFF");
+void IrrigationController::activateValve(uint8_t channel, bool state) {
+    if (channel < 1 || channel > MAX_CHANNELS) {
+        DEBUG_PRINTF("Invalid channel: %d\n", channel);
+        return;
+    }
+
+    uint8_t pin = CHANNEL_PINS[channel - 1];
+    digitalWrite(pin, state ? HIGH : LOW);
+    DEBUG_PRINTF("IrrigationController: Channel %d (GPIO %d) %s\n", channel, pin, state ? "ON" : "OFF");
+}
+
+// Helper methods
+uint8_t IrrigationController::getChannelPin(uint8_t channel) const {
+    if (channel < 1 || channel > MAX_CHANNELS) return 0;
+    return CHANNEL_PINS[channel - 1];
+}
+
+bool IrrigationController::isChannelIrrigating(uint8_t channel) const {
+    if (channel < 1 || channel > MAX_CHANNELS) return false;
+    return _status.channelIrrigating[channel - 1];
+}
+
+int8_t IrrigationController::findFreeScheduleSlot() const {
+    for (uint8_t i = 0; i < MAX_SCHEDULES; i++) {
+        if (!_schedules[i].enabled) {
+            return i;
+        }
+    }
+    return -1;  // No free slots
+}
+
+uint8_t IrrigationController::getScheduleCount() const {
+    uint8_t count = 0;
+    for (uint8_t i = 0; i < MAX_SCHEDULES; i++) {
+        if (_schedules[i].enabled) {
+            count++;
+        }
+    }
+    return count;
 }
 
 unsigned long IrrigationController::getTimeRemaining() const {
@@ -248,9 +337,54 @@ unsigned long IrrigationController::getNextScheduledTime() const {
     return nextTime;
 }
 
-bool IrrigationController::addSchedule(uint8_t index, uint8_t hour, uint8_t minute,
-                                       uint16_t durationMinutes, uint8_t weekdays) {
+int8_t IrrigationController::addSchedule(uint8_t channel, uint8_t hour, uint8_t minute,
+                                         uint16_t durationMinutes, uint8_t weekdays) {
+    // Validate channel
+    if (channel < 1 || channel > MAX_CHANNELS) {
+        DEBUG_PRINTF("Invalid channel: %d\n", channel);
+        return -1;
+    }
+
+    // Validate time
+    if (hour > 23 || minute > 59) {
+        DEBUG_PRINTLN("Invalid time");
+        return -1;
+    }
+
+    // Validate duration
+    if (durationMinutes < MIN_DURATION_MINUTES || durationMinutes > MAX_DURATION_MINUTES) {
+        DEBUG_PRINTLN("Invalid duration");
+        return -1;
+    }
+
+    // Find free slot
+    int8_t index = findFreeScheduleSlot();
+    if (index < 0) {
+        DEBUG_PRINTLN("No free schedule slots");
+        return -1;
+    }
+
+    _schedules[index].enabled = true;
+    _schedules[index].channel = channel;
+    _schedules[index].hour = hour;
+    _schedules[index].minute = minute;
+    _schedules[index].durationMinutes = durationMinutes;
+    _schedules[index].weekdays = weekdays;
+
+    DEBUG_PRINTF("IrrigationController: Schedule %d added: Ch%d at %02d:%02d for %d min\n",
+                 index, channel, hour, minute, durationMinutes);
+
+    saveSchedules();
+    return index;
+}
+
+bool IrrigationController::updateSchedule(uint8_t index, uint8_t channel, uint8_t hour, uint8_t minute,
+                                          uint16_t durationMinutes, uint8_t weekdays) {
     if (index >= MAX_SCHEDULES) {
+        return false;
+    }
+
+    if (channel < 1 || channel > MAX_CHANNELS) {
         return false;
     }
 
@@ -262,14 +396,14 @@ bool IrrigationController::addSchedule(uint8_t index, uint8_t hour, uint8_t minu
         return false;
     }
 
-    _schedules[index].enabled = true;
+    _schedules[index].channel = channel;
     _schedules[index].hour = hour;
     _schedules[index].minute = minute;
     _schedules[index].durationMinutes = durationMinutes;
     _schedules[index].weekdays = weekdays;
 
-    DEBUG_PRINTF("IrrigationController: Schedule %d added: %02d:%02d, %d min\n",
-                 index, hour, minute, durationMinutes);
+    DEBUG_PRINTF("IrrigationController: Schedule %d updated: Ch%d at %02d:%02d for %d min\n",
+                 index, channel, hour, minute, durationMinutes);
 
     return saveSchedules();
 }
@@ -313,16 +447,19 @@ void IrrigationController::getSchedules(IrrigationSchedule* schedules, uint8_t& 
 bool IrrigationController::saveSchedules() {
     DEBUG_PRINTLN("IrrigationController: Saving schedules to SPIFFS");
 
-    DynamicJsonDocument doc(1024);
+    DynamicJsonDocument doc(2048);  // Increased size for 16 schedules
     JsonArray array = doc.createNestedArray("schedules");
 
     for (int i = 0; i < MAX_SCHEDULES; i++) {
-        JsonObject schedule = array.createNestedObject();
-        schedule["enabled"] = _schedules[i].enabled;
-        schedule["hour"] = _schedules[i].hour;
-        schedule["minute"] = _schedules[i].minute;
-        schedule["duration"] = _schedules[i].durationMinutes;
-        schedule["weekdays"] = _schedules[i].weekdays;
+        if (_schedules[i].enabled) {  // Only save enabled schedules
+            JsonObject schedule = array.createNestedObject();
+            schedule["enabled"] = _schedules[i].enabled;
+            schedule["channel"] = _schedules[i].channel;  // NEW
+            schedule["hour"] = _schedules[i].hour;
+            schedule["minute"] = _schedules[i].minute;
+            schedule["duration"] = _schedules[i].durationMinutes;
+            schedule["weekdays"] = _schedules[i].weekdays;
+        }
     }
 
     File file = SPIFFS.open(SCHEDULE_FILE, "w");
@@ -352,7 +489,7 @@ bool IrrigationController::loadSchedules() {
         return false;
     }
 
-    DynamicJsonDocument doc(1024);
+    DynamicJsonDocument doc(2048);  // Increased size for 16 schedules
     DeserializationError error = deserializeJson(doc, file);
     file.close();
 
@@ -368,6 +505,7 @@ bool IrrigationController::loadSchedules() {
         if (index >= MAX_SCHEDULES) break;
 
         _schedules[index].enabled = schedule["enabled"] | false;
+        _schedules[index].channel = schedule["channel"] | 1;  // NEW - default to channel 1 for backward compatibility
         _schedules[index].hour = schedule["hour"] | 0;
         _schedules[index].minute = schedule["minute"] | 0;
         _schedules[index].durationMinutes = schedule["duration"] | DEFAULT_DURATION_MINUTES;

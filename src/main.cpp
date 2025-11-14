@@ -96,11 +96,11 @@ void setup() {
     wifiManager->setTimeUpdateCallback(timeUpdateCallback);
 
     // Add some default schedules for testing (optional)
-    // Schedule 1: Every day at 6:00 AM for 30 minutes
-    irrigationController->addSchedule(0, 6, 0, 30, 0x7F); // 0x7F = all days
+    // Channel 1: Every day at 6:00 AM for 30 minutes
+    irrigationController->addSchedule(1, 6, 0, 30, 0x7F); // Channel 1, 0x7F = all days
 
-    // Schedule 2: Every day at 6:00 PM for 20 minutes
-    irrigationController->addSchedule(1, 18, 0, 20, 0x7F);
+    // Channel 2: Every day at 6:00 PM for 20 minutes
+    irrigationController->addSchedule(2, 18, 0, 20, 0x7F); // Channel 2
 
     // Show initial status
     displayManager->showStatus();
