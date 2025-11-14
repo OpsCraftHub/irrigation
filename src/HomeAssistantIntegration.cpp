@@ -200,6 +200,11 @@ void HomeAssistantIntegration::subscribe() {
 }
 
 void HomeAssistantIntegration::update() {
+    // Check if MQTT client is initialized
+    if (!_mqttClient) {
+        return;
+    }
+
     if (!WiFi.isConnected()) {
         return;
     }
