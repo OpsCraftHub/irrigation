@@ -873,7 +873,6 @@ String WiFiManager::getStatusPage() {
 <html>
 <head>
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta http-equiv="refresh" content="5">
     <title>Irrigation Status</title>
     <style>
         body {
@@ -918,6 +917,142 @@ String WiFiManager::getStatusPage() {
             background: rgba(0,255,0,0.1);
             border-radius: 5px;
             font-size: 14px;
+        }
+        .schedule-section {
+            margin-top: 20px;
+            padding: 20px;
+            background: rgba(0,0,0,0.35);
+            border-radius: 10px;
+            border: 1px solid rgba(0,255,0,0.2);
+        }
+        .section-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 15px;
+        }
+        .section-header h2 {
+            margin: 0;
+            font-size: 20px;
+            color: #00ffcc;
+        }
+        .add-btn {
+            width: 42px;
+            height: 42px;
+            border-radius: 50%;
+            border: none;
+            font-size: 26px;
+            font-weight: bold;
+            background: #48bb78;
+            color: #fff;
+            cursor: pointer;
+            transition: opacity 0.2s ease;
+        }
+        .add-btn:hover {
+            opacity: 0.85;
+        }
+        .schedule-form {
+            background: rgba(0,0,0,0.35);
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 15px;
+        }
+        .schedule-form.hidden {
+            display: none;
+        }
+        .schedule-form label {
+            display: block;
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+        .schedule-form input,
+        .schedule-form select {
+            width: 100%;
+            padding: 10px;
+            border-radius: 5px;
+            border: 1px solid rgba(255,255,255,0.2);
+            background: rgba(0,0,0,0.2);
+            color: #fff;
+            font-size: 16px;
+            margin-bottom: 10px;
+        }
+        .schedule-form input[type="number"]::-webkit-inner-spin-button {
+            filter: invert(1);
+        }
+        .form-actions {
+            display: flex;
+            gap: 10px;
+        }
+        .form-actions button {
+            flex: 1;
+            padding: 10px;
+            border-radius: 5px;
+            border: none;
+            font-weight: bold;
+            cursor: pointer;
+            background: #48bb78;
+            color: #fff;
+        }
+        .form-actions .secondary {
+            background: rgba(255,255,255,0.1);
+            color: #fff;
+        }
+        .schedule-message {
+            padding: 10px;
+            border-radius: 5px;
+            margin-bottom: 15px;
+            font-size: 14px;
+        }
+        .channel-grid {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+        .channel-card {
+            border: 1px solid rgba(0,255,0,0.2);
+            border-radius: 8px;
+            padding: 12px;
+            background: rgba(0,0,0,0.3);
+        }
+        .channel-card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+        .channel-card h3 {
+            margin: 0;
+            font-size: 18px;
+            color: #fff;
+        }
+        .schedule-pill {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 10px;
+            margin-bottom: 6px;
+            border-radius: 5px;
+            background: rgba(0,255,0,0.08);
+            font-size: 14px;
+        }
+        .schedule-pill:last-child {
+            margin-bottom: 0;
+        }
+        .pill-action {
+            border: none;
+            background: transparent;
+            color: #ff6666;
+            font-size: 20px;
+            cursor: pointer;
+            line-height: 1;
+        }
+        .empty-state {
+            padding: 15px;
+            text-align: center;
+            color: #999;
+            border: 1px dashed rgba(255,255,255,0.2);
+            border-radius: 6px;
         }
     </style>
 </head>
@@ -1027,6 +1162,243 @@ String WiFiManager::getStatusPage() {
 
     page += R"rawliteral(
         </div>
+
+        <div class="schedule-section">
+            <div class="section-header">
+                <h2>Channel Schedules</h2>
+                <button type="button" class="add-btn" id="addScheduleBtn" onclick="toggleScheduleForm()">+</button>
+            </div>
+            <div id="scheduleForm" class="schedule-form hidden">
+                <label for="channelSelect">Channel / Pin</label>
+                <select id="channelSelect"></select>
+
+                <label for="scheduleTime">Start Time</label>
+                <input type="time" id="scheduleTime" value="06:00">
+
+                <label for="scheduleDuration">Duration (minutes)</label>
+                <input type="number" id="scheduleDuration" min="1" max="240" value="30">
+
+                <div class="form-actions">
+                    <button type="button" onclick="saveSchedule()">Save</button>
+                    <button type="button" class="secondary" onclick="cancelSchedule()">Cancel</button>
+                </div>
+            </div>
+            <div id="scheduleMessage" class="schedule-message" style="display:none;"></div>
+            <div id="scheduleList" class="channel-grid"></div>
+        </div>
+
+        <script>
+        let channelMeta = [];
+
+        document.addEventListener('DOMContentLoaded', function() {
+            loadScheduleData();
+        });
+
+        function loadScheduleData() {
+            fetch('/api/schedules')
+                .then(response => response.json())
+                .then(data => {
+                    if (!data.success) {
+                        showScheduleMessage(data.message || 'Unable to load schedules.', true);
+                        return;
+                    }
+
+                    channelMeta = data.channels || [];
+                    renderChannelOptions();
+                    renderScheduleList(data.schedules || []);
+                    if (channelMeta.length === 0) {
+                        showScheduleMessage('No channels detected. Check Config.h pins.', true);
+                    }
+                })
+                .catch(error => {
+                    showScheduleMessage('Failed to load schedules: ' + error, true);
+                });
+        }
+
+        function renderChannelOptions() {
+            const select = document.getElementById('channelSelect');
+            if (!select) return;
+            select.innerHTML = '';
+
+            channelMeta.forEach(channel => {
+                const option = document.createElement('option');
+                option.value = channel.channel;
+                option.textContent = `Channel ${channel.channel} • GPIO ${channel.pin}`;
+                select.appendChild(option);
+            });
+        }
+
+        function renderScheduleList(schedules) {
+            const container = document.getElementById('scheduleList');
+            if (!container) return;
+
+            if (!schedules || schedules.length === 0) {
+                container.innerHTML = '<div class="empty-state">No schedules yet. Use the + button to add one.</div>';
+                return;
+            }
+
+            const grouped = {};
+            schedules.forEach(schedule => {
+                const key = schedule.channel;
+                if (!grouped[key]) {
+                    grouped[key] = [];
+                }
+                grouped[key].push(schedule);
+            });
+
+            let html = '';
+            Object.keys(grouped).sort((a, b) => Number(a) - Number(b)).forEach(channelKey => {
+                const entries = grouped[channelKey].sort((a, b) => {
+                    return (a.hour * 60 + a.minute) - (b.hour * 60 + b.minute);
+                });
+                const meta = channelMeta.find(entry => entry.channel === Number(channelKey));
+                const pinLabel = meta ? ` · GPIO ${meta.pin}` : '';
+                html += `<div class="channel-card">
+                    <div class="channel-card-header">
+                        <h3>Channel ${channelKey}${pinLabel}</h3>
+                    </div>
+                    <div class="channel-card-body">`;
+                entries.forEach(schedule => {
+                    html += `<div class="schedule-pill">
+                        <div><strong>${formatTime(schedule.hour, schedule.minute)}</strong> · ${schedule.duration} min</div>
+                        <button class="pill-action" onclick="deleteSchedule(${schedule.id})">&times;</button>
+                    </div>`;
+                });
+                html += `</div></div>`;
+            });
+            container.innerHTML = html;
+        }
+
+        function formatTime(hour, minute) {
+            const h = String(hour).padStart(2, '0');
+            const m = String(minute).padStart(2, '0');
+            return `${h}:${m}`;
+        }
+
+        function setScheduleForm(open) {
+            const form = document.getElementById('scheduleForm');
+            const button = document.getElementById('addScheduleBtn');
+            if (!form || !button) return;
+            if (open) {
+                form.classList.remove('hidden');
+                button.textContent = '×';
+            } else {
+                form.classList.add('hidden');
+                button.textContent = '+';
+            }
+        }
+
+        function toggleScheduleForm() {
+            const form = document.getElementById('scheduleForm');
+            if (!form) return;
+            setScheduleForm(form.classList.contains('hidden'));
+        }
+
+        function cancelSchedule(resetMessage) {
+            if (resetMessage === undefined) {
+                resetMessage = true;
+            }
+            const time = document.getElementById('scheduleTime');
+            const duration = document.getElementById('scheduleDuration');
+            if (time) time.value = '06:00';
+            if (duration) duration.value = 30;
+            if (resetMessage) {
+                showScheduleMessage('', false);
+            }
+            setScheduleForm(false);
+        }
+
+        function showScheduleMessage(text, isError) {
+            const msg = document.getElementById('scheduleMessage');
+            if (!msg) return;
+            if (!text) {
+                msg.style.display = 'none';
+                return;
+            }
+            msg.style.display = 'block';
+            msg.style.background = isError ? 'rgba(255,0,0,0.2)' : 'rgba(0,255,0,0.15)';
+            msg.style.color = isError ? '#ff6666' : '#0f0';
+            msg.innerHTML = text;
+        }
+
+        function saveSchedule() {
+            const select = document.getElementById('channelSelect');
+            const time = document.getElementById('scheduleTime');
+            const duration = document.getElementById('scheduleDuration');
+
+            if (!select || !time || !duration) {
+                showScheduleMessage('Schedule form is not ready.', true);
+                return;
+            }
+
+            if (!time.value) {
+                showScheduleMessage('Select a start time.', true);
+                return;
+            }
+
+            const parts = time.value.split(':');
+            if (parts.length < 2) {
+                showScheduleMessage('Invalid time format.', true);
+                return;
+            }
+
+            const payload = {
+                channel: parseInt(select.value, 10),
+                hour: parseInt(parts[0], 10),
+                minute: parseInt(parts[1], 10),
+                duration: parseInt(duration.value, 10)
+            };
+
+            if (!payload.channel || payload.duration <= 0) {
+                showScheduleMessage('Channel and duration are required.', true);
+                return;
+            }
+
+            showScheduleMessage('Saving schedule...', false);
+
+            fetch('/api/schedules', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(payload)
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    cancelSchedule(false);
+                    showScheduleMessage('Schedule saved.', false);
+                    loadScheduleData();
+                } else {
+                    showScheduleMessage(data.message || 'Failed to save schedule.', true);
+                }
+            })
+            .catch(error => {
+                showScheduleMessage('Failed to save schedule: ' + error, true);
+            });
+        }
+
+        function deleteSchedule(index) {
+            if (index === undefined || index === null) return;
+            if (!confirm('Remove this schedule?')) {
+                return;
+            }
+
+            fetch('/api/schedules?id=' + index, {
+                method: 'DELETE'
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    showScheduleMessage('Schedule removed.', false);
+                    loadScheduleData();
+                } else {
+                    showScheduleMessage(data.message || 'Failed to remove schedule.', true);
+                }
+            })
+            .catch(error => {
+                showScheduleMessage('Failed to remove schedule: ' + error, true);
+            });
+        }
+        </script>
 )rawliteral";
 
     // Add MQTT configuration form if not connected
@@ -1305,6 +1677,111 @@ void WiFiManager::startWebServer() {
     // Status page (root)
     _webServer->on("/", HTTP_GET, [this]() {
         _webServer->send(200, "text/html", getStatusPage());
+    });
+
+    // Schedule management APIs
+    _webServer->on("/api/schedules", HTTP_GET, [this]() {
+        if (!_controller) {
+            _webServer->send(500, "application/json", "{\"success\":false,\"message\":\"Controller not ready\"}");
+            return;
+        }
+
+        DynamicJsonDocument doc(2048);
+        doc["success"] = true;
+
+        JsonArray channels = doc.createNestedArray("channels");
+        for (uint8_t i = 0; i < MAX_CHANNELS; i++) {
+            JsonObject channel = channels.createNestedObject();
+            channel["channel"] = i + 1;
+            channel["pin"] = CHANNEL_PINS[i];
+        }
+
+        IrrigationSchedule schedules[MAX_SCHEDULES];
+        uint8_t count = 0;
+        _controller->getSchedules(schedules, count);
+
+        JsonArray array = doc.createNestedArray("schedules");
+        for (uint8_t i = 0; i < count; i++) {
+            if (!schedules[i].enabled) {
+                continue;
+            }
+
+            JsonObject entry = array.createNestedObject();
+            entry["id"] = i;
+            entry["channel"] = schedules[i].channel;
+            entry["hour"] = schedules[i].hour;
+            entry["minute"] = schedules[i].minute;
+            entry["duration"] = schedules[i].durationMinutes;
+            entry["pin"] = _controller->getChannelPin(schedules[i].channel);
+        }
+
+        String json;
+        serializeJson(doc, json);
+        _webServer->send(200, "application/json", json);
+    });
+
+    _webServer->on("/api/schedules", HTTP_POST, [this]() {
+        if (!_controller) {
+            _webServer->send(500, "application/json", "{\"success\":false,\"message\":\"Controller not ready\"}");
+            return;
+        }
+
+        if (!_webServer->hasArg("plain")) {
+            _webServer->send(400, "application/json", "{\"success\":false,\"message\":\"Missing payload\"}");
+            return;
+        }
+
+        DynamicJsonDocument doc(512);
+        DeserializationError error = deserializeJson(doc, _webServer->arg("plain"));
+        if (error) {
+            _webServer->send(400, "application/json", "{\"success\":false,\"message\":\"Invalid JSON\"}");
+            return;
+        }
+
+        uint8_t channel = doc["channel"] | 0;
+        uint8_t hour = doc["hour"] | 0;
+        uint8_t minute = doc["minute"] | 0;
+        uint16_t duration = doc["duration"] | DEFAULT_DURATION_MINUTES;
+        uint8_t weekdays = doc["weekdays"] | 0x7F;
+
+        if (channel < 1 || channel > MAX_CHANNELS) {
+            _webServer->send(400, "application/json", "{\"success\":false,\"message\":\"Invalid channel\"}");
+            return;
+        }
+        if (hour > 23 || minute > 59) {
+            _webServer->send(400, "application/json", "{\"success\":false,\"message\":\"Invalid start time\"}");
+            return;
+        }
+        if (duration < MIN_DURATION_MINUTES || duration > MAX_DURATION_MINUTES) {
+            _webServer->send(400, "application/json", "{\"success\":false,\"message\":\"Invalid duration\"}");
+            return;
+        }
+
+        int8_t index = _controller->addSchedule(channel, hour, minute, duration, weekdays);
+        if (index >= 0) {
+            _webServer->send(200, "application/json", "{\"success\":true,\"message\":\"Schedule saved\",\"index\":" + String(index) + "}");
+        } else {
+            _webServer->send(500, "application/json", "{\"success\":false,\"message\":\"Unable to save schedule\"}");
+        }
+    });
+
+    _webServer->on("/api/schedules", HTTP_DELETE, [this]() {
+        if (!_controller) {
+            _webServer->send(500, "application/json", "{\"success\":false,\"message\":\"Controller not ready\"}");
+            return;
+        }
+
+        if (!_webServer->hasArg("id")) {
+            _webServer->send(400, "application/json", "{\"success\":false,\"message\":\"Missing schedule id\"}");
+            return;
+        }
+
+        uint8_t index = _webServer->arg("id").toInt();
+        if (_controller->removeSchedule(index)) {
+            _webServer->send(200, "application/json", "{\"success\":true,\"message\":\"Schedule removed\"}");
+        } else {
+            _webServer->send(500, "application/json", "{\"success\":false,\"message\":\"Failed to remove schedule\"}");
+        }
     });
 
     // MQTT configuration save
