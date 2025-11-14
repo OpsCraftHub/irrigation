@@ -14,8 +14,15 @@
 // PIN DEFINITIONS
 // ============================================================================
 
-// Relay/MOSFET Output for Valve Control
-#define VALVE_PIN 25  // GPIO25 - Can handle relay/MOSFET
+// Multi-Channel Relay/MOSFET Outputs for Valve Control
+#define MAX_CHANNELS 4
+#define CHANNEL_1_PIN 25  // GPIO25 - Channel 1
+#define CHANNEL_2_PIN 4   // GPIO4  - Channel 2
+#define CHANNEL_3_PIN 16  // GPIO16 - Channel 3
+#define CHANNEL_4_PIN 17  // GPIO17 - Channel 4
+
+// Legacy definition for backward compatibility
+#define VALVE_PIN CHANNEL_1_PIN
 
 // Button Inputs (active LOW with internal pullup)
 #define BTN_START 32   // Start irrigation manually
@@ -38,7 +45,7 @@
 // IRRIGATION SETTINGS
 // ============================================================================
 
-#define MAX_SCHEDULES 4              // Maximum number of irrigation schedules
+#define MAX_SCHEDULES 16             // Maximum number of irrigation schedules (4 per channel)
 #define DEFAULT_DURATION_MINUTES 30  // Default irrigation duration
 #define MIN_DURATION_MINUTES 1       // Minimum duration
 #define MAX_DURATION_MINUTES 240     // Maximum duration (4 hours)
@@ -147,6 +154,7 @@
 // Irrigation schedule structure
 struct IrrigationSchedule {
     bool enabled;
+    uint8_t channel;           // Channel number (1-4)
     uint8_t hour;              // 0-23
     uint8_t minute;            // 0-59
     uint16_t durationMinutes;  // Duration in minutes
@@ -157,13 +165,24 @@ struct IrrigationSchedule {
 struct SystemStatus {
     bool wifiConnected;
     bool mqttConnected;
-    bool irrigating;
+    bool irrigating;           // True if any channel is irrigating
+    bool channelIrrigating[MAX_CHANNELS];  // Per-channel irrigation status
     bool manualMode;
     unsigned long irrigationStartTime;
+    unsigned long channelStartTime[MAX_CHANNELS];  // Per-channel start times
     time_t lastIrrigationTime;
     time_t nextScheduledTime;
     uint16_t currentDuration;
+    uint16_t channelDuration[MAX_CHANNELS];  // Per-channel durations
     String lastError;
+};
+
+// Channel pin mapping array
+const uint8_t CHANNEL_PINS[MAX_CHANNELS] = {
+    CHANNEL_1_PIN,
+    CHANNEL_2_PIN,
+    CHANNEL_3_PIN,
+    CHANNEL_4_PIN
 };
 
 #endif // CONFIG_H

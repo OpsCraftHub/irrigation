@@ -18,18 +18,22 @@ public:
     void update();
 
     // Manual control
-    void startIrrigation(uint16_t durationMinutes = DEFAULT_DURATION_MINUTES);
-    void stopIrrigation();
+    void startIrrigation(uint8_t channel = 1, uint16_t durationMinutes = DEFAULT_DURATION_MINUTES);
+    void stopIrrigation(uint8_t channel = 0);  // 0 = stop all channels
     bool isIrrigating() const { return _status.irrigating; }
+    bool isChannelIrrigating(uint8_t channel) const;
     bool isManualMode() const { return _status.manualMode; }
 
-    // Schedule management
-    bool addSchedule(uint8_t index, uint8_t hour, uint8_t minute,
-                     uint16_t durationMinutes, uint8_t weekdays);
+    // Schedule management - CRUD operations
+    int8_t addSchedule(uint8_t channel, uint8_t hour, uint8_t minute,
+                       uint16_t durationMinutes, uint8_t weekdays);  // Returns schedule index or -1
+    bool updateSchedule(uint8_t index, uint8_t channel, uint8_t hour, uint8_t minute,
+                        uint16_t durationMinutes, uint8_t weekdays);
     bool removeSchedule(uint8_t index);
     bool enableSchedule(uint8_t index, bool enabled);
     IrrigationSchedule getSchedule(uint8_t index) const;
     void getSchedules(IrrigationSchedule* schedules, uint8_t& count) const;
+    uint8_t getScheduleCount() const;  // Get number of active schedules
 
     // Storage
     bool saveSchedules();
@@ -51,7 +55,9 @@ private:
     void updateIrrigationState();
     void safetyCheck();
     bool shouldRunSchedule(const IrrigationSchedule& schedule, time_t currentTime);
-    void activateValve(bool state);
+    void activateValve(uint8_t channel, bool state);
+    uint8_t getChannelPin(uint8_t channel) const;
+    int8_t findFreeScheduleSlot() const;
 
     // Member variables
     IrrigationSchedule _schedules[MAX_SCHEDULES];

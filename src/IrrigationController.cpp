@@ -14,6 +14,7 @@ IrrigationController::IrrigationController()
     // Initialize schedules
     for (int i = 0; i < MAX_SCHEDULES; i++) {
         _schedules[i].enabled = false;
+        _schedules[i].channel = 1;  // Default to channel 1
         _schedules[i].hour = 0;
         _schedules[i].minute = 0;
         _schedules[i].durationMinutes = DEFAULT_DURATION_MINUTES;
