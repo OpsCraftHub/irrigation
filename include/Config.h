@@ -99,8 +99,8 @@
 #define OTA_CHECK_INTERVAL 86400000    // Check daily (24 hours in milliseconds)
 
 // GitHub repository for firmware updates
-#define GITHUB_REPO_OWNER "yourusername"
-#define GITHUB_REPO_NAME "irrigation-controller"
+#define GITHUB_REPO_OWNER "OpsCraftHub"
+#define GITHUB_REPO_NAME "irrigation"
 #define GITHUB_FIRMWARE_PATH "firmware/firmware.bin"
 #define GITHUB_VERSION_PATH "firmware/version.txt"
 

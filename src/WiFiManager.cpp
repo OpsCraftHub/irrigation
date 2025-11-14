@@ -71,6 +71,10 @@ bool WiFiManager::begin(const char* ssid, const char* password) {
             // Start web server for status page
             startWebServer();
 
+            // Check for firmware updates on startup
+            DEBUG_PRINTLN("WiFiManager: Checking for firmware updates on startup...");
+            checkForUpdates();
+
             DEBUG_PRINTLN("WiFiManager: Initialized");
             return true;
         } else {
@@ -1127,6 +1131,81 @@ String WiFiManager::getStatusPage() {
     }
 
     page += R"rawliteral(
+        <div class="info" style="background: rgba(0,100,255,0.2); border-left: 4px solid #0066ff; margin-top:20px;">
+            <h2 style="margin-top:0; color:#00aaff;">System Controls</h2>
+            <div style="display:flex; gap:10px; flex-wrap:wrap;">
+                <button type="button" onclick="checkUpdates()" style="flex:1; min-width:120px; padding:12px 20px; background:#48bb78; color:#fff; border:none; border-radius:5px; cursor:pointer; font-weight:bold;">Check for Updates</button>
+                <button type="button" onclick="restartDevice()" style="flex:1; min-width:120px; padding:12px 20px; background:#ff8800; color:#fff; border:none; border-radius:5px; cursor:pointer; font-weight:bold;">Restart Device</button>
+            </div>
+            <div id="systemMessage" style="margin-top:15px; padding:12px; border-radius:5px; display:none;"></div>
+        </div>
+
+        <script>
+        function checkUpdates() {
+            var msg = document.getElementById('systemMessage');
+            msg.style.display = 'block';
+            msg.style.background = 'rgba(255,255,0,0.2)';
+            msg.style.color = '#ff0';
+            msg.innerHTML = 'Checking for updates...';
+
+            fetch('/system/check-updates', {
+                method: 'POST'
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    msg.style.background = 'rgba(0,255,0,0.2)';
+                    msg.style.color = '#0f0';
+                    msg.innerHTML = 'SUCCESS: ' + data.message;
+                    if (data.updating) {
+                        msg.innerHTML += '<br><strong>Device is updating and will restart automatically...</strong>';
+                    }
+                } else {
+                    msg.style.background = 'rgba(255,0,0,0.2)';
+                    msg.style.color = '#f00';
+                    msg.innerHTML = 'ERROR: ' + data.message;
+                }
+            })
+            .catch(error => {
+                msg.style.background = 'rgba(255,0,0,0.2)';
+                msg.style.color = '#f00';
+                msg.innerHTML = 'ERROR: ' + error;
+            });
+        }
+
+        function restartDevice() {
+            if (!confirm('Are you sure you want to restart the device?')) {
+                return;
+            }
+
+            var msg = document.getElementById('systemMessage');
+            msg.style.display = 'block';
+            msg.style.background = 'rgba(255,255,0,0.2)';
+            msg.style.color = '#ff0';
+            msg.innerHTML = 'Restarting device...';
+
+            fetch('/system/restart', {
+                method: 'POST'
+            })
+            .then(response => response.json())
+            .then(data => {
+                msg.style.background = 'rgba(0,255,0,0.2)';
+                msg.style.color = '#0f0';
+                msg.innerHTML = 'Device is restarting... Page will reload in 10 seconds.';
+                setTimeout(function() {
+                    location.reload();
+                }, 10000);
+            })
+            .catch(error => {
+                msg.style.background = 'rgba(0,255,0,0.2)';
+                msg.style.color = '#0f0';
+                msg.innerHTML = 'Device is restarting... Page will reload in 10 seconds.';
+                setTimeout(function() {
+                    location.reload();
+                }, 10000);
+            });
+        }
+        </script>
     </div>
 </body>
 </html>)rawliteral";
@@ -1196,6 +1275,42 @@ void WiFiManager::startWebServer() {
             _webServer->send(200, "application/json", "{\"success\":true,\"message\":\"Connection successful!\"}");
         } else {
             _webServer->send(200, "application/json", "{\"success\":false,\"message\":\"Connection failed\"}");
+        }
+    });
+
+    // System restart
+    _webServer->on("/system/restart", HTTP_POST, [this]() {
+        DEBUG_PRINTLN("WiFiManager: Restart requested via web interface");
+        _webServer->send(200, "application/json", "{\"success\":true,\"message\":\"Restarting device...\"}");
+        delay(1000);
+        ESP.restart();
+    });
+
+    // System update check
+    _webServer->on("/system/check-updates", HTTP_POST, [this]() {
+        DEBUG_PRINTLN("WiFiManager: Update check requested via web interface");
+
+        if (!isConnected()) {
+            _webServer->send(200, "application/json", "{\"success\":false,\"message\":\"Not connected to WiFi\"}");
+            return;
+        }
+
+        String latestVersion;
+        if (checkGitHubVersion(latestVersion)) {
+            DEBUG_PRINTF("WiFiManager: Latest version: %s, Current: %s\n", latestVersion.c_str(), VERSION);
+
+            if (latestVersion != String(VERSION)) {
+                _webServer->send(200, "application/json",
+                    "{\"success\":true,\"message\":\"Update found! Version " + latestVersion + " is available. Downloading...\",\"updating\":true}");
+                delay(1000);
+                performOTA();
+            } else {
+                _webServer->send(200, "application/json",
+                    "{\"success\":true,\"message\":\"Firmware is up to date (v" + String(VERSION) + ")\",\"updating\":false}");
+            }
+        } else {
+            _webServer->send(200, "application/json",
+                "{\"success\":false,\"message\":\"Failed to check for updates. Check GitHub repository settings.\"}");
         }
     });
 
