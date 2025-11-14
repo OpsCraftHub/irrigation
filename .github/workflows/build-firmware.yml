@@ -23,6 +23,13 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull latest changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git pull origin main
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -34,12 +41,27 @@ jobs:
           python -m pip install --upgrade pip
           pip install platformio
 
-      - name: Extract version from Config.h
+      - name: Bump version in Config.h
         id: version
         run: |
-          VERSION=$(grep '#define VERSION' include/Config.h | sed 's/.*"\(.*\)"/\1/')
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "Firmware version: $VERSION"
+          # Extract current version
+          CURRENT_VERSION=$(grep '#define VERSION' include/Config.h | sed 's/.*"\(.*\)"/\1/')
+          echo "Current version: $CURRENT_VERSION"
+
+          # Split version into parts
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
+
+          # Increment patch version
+          NEW_PATCH=$((PATCH + 1))
+          NEW_VERSION="$MAJOR.$MINOR.$NEW_PATCH"
+          echo "New version: $NEW_VERSION"
+
+          # Update Config.h (locally only, don't commit yet)
+          sed -i "s/#define VERSION \".*\"/#define VERSION \"$NEW_VERSION\"/" include/Config.h
+
+          # Output for later steps
+          echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
+          echo "Bumped version to: $NEW_VERSION"
 
       - name: Build firmware
         run: pio run --environment esp32dev
@@ -50,23 +72,23 @@ jobs:
           cp .pio/build/esp32dev/firmware.bin firmware/firmware.bin
           echo "${{ steps.version.outputs.version }}" > firmware/version.txt
 
-      - name: Check for changes
+      - name: Check for changes and commit everything together
         id: check_changes
         run: |
-          git add firmware/firmware.bin firmware/version.txt
+          # Stage all changes: Config.h, firmware.bin, and version.txt
+          git add include/Config.h firmware/firmware.bin firmware/version.txt
+
           if git diff --staged --quiet; then
             echo "changed=false" >> $GITHUB_OUTPUT
+            echo "No changes to commit"
           else
             echo "changed=true" >> $GITHUB_OUTPUT
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git commit -m "Release v${{ steps.version.outputs.version }} [skip ci]"
+            git push
+            echo "Committed and pushed version ${{ steps.version.outputs.version }}"
           fi
-
-      - name: Commit and push firmware
-        if: steps.check_changes.outputs.changed == 'true'
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git commit -m "Build firmware v${{ steps.version.outputs.version }} [skip ci]"
-          git push
 
       - name: Create GitHub Release
         if: steps.check_changes.outputs.changed == 'true'
