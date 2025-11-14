@@ -72,6 +72,7 @@ private:
     // Credential management
     bool loadCredentials();
     bool saveCredentials(const String& ssid, const String& password);
+    bool clearCredentials();
 
     // Web server setup for config portal
     void setupWebServer();

@@ -143,6 +143,20 @@ bool WiFiManager::saveCredentials(const String& ssid, const String& password) {
     return true;
 }
 
+bool WiFiManager::clearCredentials() {
+    if (SPIFFS.exists(WIFI_CREDENTIALS_FILE)) {
+        if (SPIFFS.remove(WIFI_CREDENTIALS_FILE)) {
+            DEBUG_PRINTLN("WiFiManager: WiFi credentials removed successfully");
+            return true;
+        } else {
+            DEBUG_PRINTLN("WiFiManager: Failed to remove WiFi credentials file");
+            return false;
+        }
+    }
+    DEBUG_PRINTLN("WiFiManager: No credentials file to remove");
+    return true; // Not an error if file doesn't exist
+}
+
 void WiFiManager::connectWiFi() {
     if (WiFi.status() == WL_CONNECTED) {
         return;
@@ -1044,9 +1058,10 @@ String WiFiManager::getStatusPage() {
                 <label style="display:block; margin-top:10px;"><strong>Password (optional):</strong></label>
                 <input type="password" id="password" name="password" placeholder="Leave empty if no auth" style="width:100%; padding:8px; margin-top:5px; border:1px solid #0f0; background:#0a0a0a; color:#0f0; font-family:'Courier New';">
 
-                <div style="margin-top:15px;">
-                    <button type="button" onclick="testMqtt()" style="padding:10px 20px; background:#48bb78; color:#fff; border:none; border-radius:5px; cursor:pointer; margin-right:10px;">Test Connection</button>
+                <div style="margin-top:15px; display:flex; gap:10px; flex-wrap:wrap;">
+                    <button type="button" onclick="testMqtt()" style="padding:10px 20px; background:#48bb78; color:#fff; border:none; border-radius:5px; cursor:pointer;">Test Connection</button>
                     <button type="button" onclick="saveMqtt()" style="padding:10px 20px; background:#667eea; color:#fff; border:none; border-radius:5px; cursor:pointer;">Save & Restart</button>
+                    <button type="button" onclick="removeMqtt()" style="padding:10px 20px; background:#dc3545; color:#fff; border:none; border-radius:5px; cursor:pointer;">Remove MQTT</button>
                 </div>
                 <div id="mqttMessage" style="margin-top:10px; padding:10px; border-radius:5px; display:none;"></div>
             </form>
@@ -1139,6 +1154,7 @@ String WiFiManager::getStatusPage() {
             <div style="display:flex; gap:10px; flex-wrap:wrap;">
                 <button type="button" onclick="checkUpdates()" style="flex:1; min-width:120px; padding:12px 20px; background:#48bb78; color:#fff; border:none; border-radius:5px; cursor:pointer; font-weight:bold;">Check for Updates</button>
                 <button type="button" onclick="restartDevice()" style="flex:1; min-width:120px; padding:12px 20px; background:#ff8800; color:#fff; border:none; border-radius:5px; cursor:pointer; font-weight:bold;">Restart Device</button>
+                <button type="button" onclick="removeWiFi()" style="flex:1; min-width:120px; padding:12px 20px; background:#dc3545; color:#fff; border:none; border-radius:5px; cursor:pointer; font-weight:bold;">Remove WiFi</button>
             </div>
             <div id="systemMessage" style="margin-top:15px; padding:12px; border-radius:5px; display:none;"></div>
         </div>
@@ -1206,6 +1222,69 @@ String WiFiManager::getStatusPage() {
                 setTimeout(function() {
                     location.reload();
                 }, 10000);
+            });
+        }
+
+        function removeWiFi() {
+            if (!confirm('Are you sure you want to remove WiFi credentials? The device will restart in configuration mode.')) {
+                return;
+            }
+
+            var msg = document.getElementById('systemMessage');
+            msg.style.display = 'block';
+            msg.style.background = 'rgba(255,255,0,0.2)';
+            msg.style.color = '#ff0';
+            msg.innerHTML = 'Removing WiFi credentials...';
+
+            fetch('/wifi/remove', {
+                method: 'POST'
+            })
+            .then(response => response.json())
+            .then(data => {
+                msg.style.background = 'rgba(0,255,0,0.2)';
+                msg.style.color = '#0f0';
+                msg.innerHTML = 'WiFi credentials removed. Device is restarting...';
+            })
+            .catch(error => {
+                msg.style.background = 'rgba(0,255,0,0.2)';
+                msg.style.color = '#0f0';
+                msg.innerHTML = 'WiFi credentials removed. Device is restarting...';
+            });
+        }
+
+        function removeMqtt() {
+            if (!confirm('Are you sure you want to remove MQTT credentials?')) {
+                return;
+            }
+
+            var msg = document.getElementById('mqttMessage');
+            msg.style.display = 'block';
+            msg.style.background = 'rgba(255,255,0,0.2)';
+            msg.style.color = '#ff0';
+            msg.innerHTML = 'Removing MQTT credentials...';
+
+            fetch('/mqtt/remove', {
+                method: 'POST'
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    msg.style.background = 'rgba(0,255,0,0.2)';
+                    msg.style.color = '#0f0';
+                    msg.innerHTML = 'SUCCESS: ' + data.message;
+                    setTimeout(function() {
+                        location.reload();
+                    }, 2000);
+                } else {
+                    msg.style.background = 'rgba(255,0,0,0.2)';
+                    msg.style.color = '#f00';
+                    msg.innerHTML = 'ERROR: ' + data.message;
+                }
+            })
+            .catch(error => {
+                msg.style.background = 'rgba(255,0,0,0.2)';
+                msg.style.color = '#f00';
+                msg.innerHTML = 'ERROR: ' + error;
             });
         }
         </script>
@@ -1278,6 +1357,42 @@ void WiFiManager::startWebServer() {
             _webServer->send(200, "application/json", "{\"success\":true,\"message\":\"Connection successful!\"}");
         } else {
             _webServer->send(200, "application/json", "{\"success\":false,\"message\":\"Connection failed\"}");
+        }
+    });
+
+    // WiFi credentials removal
+    _webServer->on("/wifi/remove", HTTP_POST, [this]() {
+        DEBUG_PRINTLN("WiFiManager: WiFi credentials removal requested via web interface");
+
+        if (clearCredentials()) {
+            _webServer->send(200, "application/json", "{\"success\":true,\"message\":\"WiFi credentials removed. Restarting...\"}");
+            delay(2000);
+            ESP.restart();
+        } else {
+            _webServer->send(500, "application/json", "{\"success\":false,\"message\":\"Failed to remove WiFi credentials\"}");
+        }
+    });
+
+    // MQTT credentials removal
+    _webServer->on("/mqtt/remove", HTTP_POST, [this]() {
+        DEBUG_PRINTLN("WiFiManager: MQTT credentials removal requested via web interface");
+
+        if (!_homeAssistant) {
+            _webServer->send(500, "application/json", "{\"success\":false,\"message\":\"MQTT not initialized\"}");
+            return;
+        }
+
+        // Remove MQTT credentials file
+        if (SPIFFS.exists(MQTT_CREDENTIALS_FILE)) {
+            if (SPIFFS.remove(MQTT_CREDENTIALS_FILE)) {
+                DEBUG_PRINTLN("WiFiManager: MQTT credentials removed successfully");
+                _webServer->send(200, "application/json", "{\"success\":true,\"message\":\"MQTT credentials removed successfully\"}");
+            } else {
+                DEBUG_PRINTLN("WiFiManager: Failed to remove MQTT credentials file");
+                _webServer->send(500, "application/json", "{\"success\":false,\"message\":\"Failed to remove MQTT credentials\"}");
+            }
+        } else {
+            _webServer->send(200, "application/json", "{\"success\":true,\"message\":\"No MQTT credentials to remove\"}");
         }
     });
 
