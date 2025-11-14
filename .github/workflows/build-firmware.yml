@@ -63,6 +63,9 @@ jobs:
           echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
           echo "Bumped version to: $NEW_VERSION"
 
+      - name: Clean build directory
+        run: pio run --target clean --environment esp32dev
+
       - name: Build firmware
         run: pio run --environment esp32dev
 
