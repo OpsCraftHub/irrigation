@@ -444,13 +444,13 @@ String WiFiManager::getConfigPage() {
 </head>
 <body>
     <div class="container">
-        <h1>🌱 Irrigation WiFi Setup</h1>
+        <h1>Irrigation WiFi Setup</h1>
         <div class="info">
             <strong>Welcome!</strong><br>
             Configure your WiFi connection to get started.
         </div>
 
-        <button class="scan-btn" onclick="scanNetworks()">📡 Scan for Networks</button>
+        <button class="scan-btn" onclick="scanNetworks()">Scan for Networks</button>
         <div id="networks"></div>
         <div class="loading" id="loading">Scanning networks...</div>
 
@@ -465,7 +465,7 @@ String WiFiManager::getConfigPage() {
                 <input type="password" id="password" name="password" placeholder="Leave empty for open networks">
             </div>
 
-            <button type="submit">💾 Save & Connect</button>
+            <button type="submit">Save & Connect</button>
         </form>
     </div>
 
@@ -482,11 +482,10 @@ String WiFiManager::getConfigPage() {
                     if (data.networks && data.networks.length > 0) {
                         let html = '<div class="network-list">';
                         data.networks.forEach(network => {
-                            let signalIcon = network.rssi > -60 ? '📶' : network.rssi > -70 ? '📶' : '📶';
-                            let security = network.encryption ? '🔒' : '🔓';
+                            let security = network.encryption ? '[Secure]' : '[Open]';
                             html += `<div class="network-item" onclick="selectNetwork('${network.ssid}')">
                                 ${security} ${network.ssid}
-                                <span class="signal">${signalIcon} ${network.rssi}dBm</span>
+                                <span class="signal">${network.rssi}dBm</span>
                             </div>`;
                         });
                         html += '</div>';
@@ -906,7 +905,7 @@ String WiFiManager::getStatusPage() {
 </head>
 <body>
     <div class="lcd-container">
-        <h1>🌱 IRRIGATION CONTROLLER</h1>
+        <h1>IRRIGATION CONTROLLER</h1>
         <div class="lcd-screen">)rawliteral";
 
     // Line 1: WiFi and MQTT status
@@ -1018,7 +1017,7 @@ String WiFiManager::getStatusPage() {
 
         page += R"rawliteral(
         <div class="info" style="background: rgba(255,165,0,0.2); border-left: 4px solid #ff8800;">
-            <h2 style="margin-top:0; color:#ff8800;">⚠️ MQTT Not Connected</h2>
+            <h2 style="margin-top:0; color:#ff8800;">WARNING: MQTT Not Connected</h2>
             <form id="mqttForm" style="text-align:left;">
                 <label style="display:block; margin-top:10px;"><strong>Broker:</strong></label>
                 <input type="text" id="broker" name="broker" value=")rawliteral";
@@ -1039,8 +1038,8 @@ String WiFiManager::getStatusPage() {
                 <input type="password" id="password" name="password" placeholder="Leave empty if no auth" style="width:100%; padding:8px; margin-top:5px; border:1px solid #0f0; background:#0a0a0a; color:#0f0; font-family:'Courier New';">
 
                 <div style="margin-top:15px;">
-                    <button type="button" onclick="testMqtt()" style="padding:10px 20px; background:#48bb78; color:#fff; border:none; border-radius:5px; cursor:pointer; margin-right:10px;">🔍 Test Connection</button>
-                    <button type="button" onclick="saveMqtt()" style="padding:10px 20px; background:#667eea; color:#fff; border:none; border-radius:5px; cursor:pointer;">💾 Save & Restart</button>
+                    <button type="button" onclick="testMqtt()" style="padding:10px 20px; background:#48bb78; color:#fff; border:none; border-radius:5px; cursor:pointer; margin-right:10px;">Test Connection</button>
+                    <button type="button" onclick="saveMqtt()" style="padding:10px 20px; background:#667eea; color:#fff; border:none; border-radius:5px; cursor:pointer;">Save & Restart</button>
                 </div>
                 <div id="mqttMessage" style="margin-top:10px; padding:10px; border-radius:5px; display:none;"></div>
             </form>
@@ -1057,7 +1056,7 @@ String WiFiManager::getStatusPage() {
             msg.style.display = 'block';
             msg.style.background = 'rgba(255,255,0,0.2)';
             msg.style.color = '#ff0';
-            msg.innerHTML = '⏳ Testing connection...';
+            msg.innerHTML = 'Testing connection...';
 
             fetch('/mqtt/test', {
                 method: 'POST',
@@ -1069,17 +1068,17 @@ String WiFiManager::getStatusPage() {
                 if (data.success) {
                     msg.style.background = 'rgba(0,255,0,0.2)';
                     msg.style.color = '#0f0';
-                    msg.innerHTML = '✓ ' + data.message;
+                    msg.innerHTML = 'SUCCESS: ' + data.message;
                 } else {
                     msg.style.background = 'rgba(255,0,0,0.2)';
                     msg.style.color = '#f00';
-                    msg.innerHTML = '✗ ' + data.message;
+                    msg.innerHTML = 'ERROR: ' + data.message;
                 }
             })
             .catch(error => {
                 msg.style.background = 'rgba(255,0,0,0.2)';
                 msg.style.color = '#f00';
-                msg.innerHTML = '✗ Error: ' + error;
+                msg.innerHTML = 'ERROR: ' + error;
             });
         }
 
@@ -1098,7 +1097,7 @@ String WiFiManager::getStatusPage() {
             msg.style.display = 'block';
             msg.style.background = 'rgba(255,255,0,0.2)';
             msg.style.color = '#ff0';
-            msg.innerHTML = '⏳ Saving...';
+            msg.innerHTML = 'Saving...';
 
             fetch('/mqtt/save', {
                 method: 'POST',
@@ -1110,17 +1109,17 @@ String WiFiManager::getStatusPage() {
                 if (data.success) {
                     msg.style.background = 'rgba(0,255,0,0.2)';
                     msg.style.color = '#0f0';
-                    msg.innerHTML = '✓ ' + data.message;
+                    msg.innerHTML = 'SUCCESS: ' + data.message;
                 } else {
                     msg.style.background = 'rgba(255,0,0,0.2)';
                     msg.style.color = '#f00';
-                    msg.innerHTML = '✗ ' + data.message;
+                    msg.innerHTML = 'ERROR: ' + data.message;
                 }
             })
             .catch(error => {
                 msg.style.background = 'rgba(255,0,0,0.2)';
                 msg.style.color = '#f00';
-                msg.innerHTML = '✗ Error: ' + error;
+                msg.innerHTML = 'ERROR: ' + error;
             });
         }
         </script>
