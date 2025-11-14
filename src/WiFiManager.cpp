@@ -1008,6 +1008,9 @@ String WiFiManager::getStatusPage() {
     sprintf(uptimeBuf, "%02luh %02lum %02lus", hours, minutes, seconds);
     page += uptimeBuf;
 
+    page += "<br><strong>Firmware Version:</strong> ";
+    page += VERSION;
+
     page += R"rawliteral(
         </div>
 )rawliteral";
