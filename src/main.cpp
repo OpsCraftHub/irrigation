@@ -7,7 +7,7 @@
  * - LCD display with button controls
  * - WiFi connectivity with auto-reconnect
  * - NTP time synchronization with RTC fallback
- * - OTA updates from GitHub
+ * - Automatic OTA updates from GitHub
  * - Home Assistant MQTT integration with auto-discovery
  * - Non-volatile storage for schedules (SPIFFS)
  *
