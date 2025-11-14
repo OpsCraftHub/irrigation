@@ -12,7 +12,6 @@
  * - Non-volatile storage for schedules (SPIFFS)
  *
  * Author: Your Name
- * Version: 1.0.1
  */
 
 
