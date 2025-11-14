@@ -43,6 +43,7 @@ public:
     SystemStatus getStatus() const { return _status; }
     unsigned long getTimeRemaining() const;
     unsigned long getNextScheduledTime() const;
+    uint8_t getChannelPin(uint8_t channel) const;
 
     // Time management
     void setCurrentTime(time_t time);
@@ -56,7 +57,6 @@ private:
     void safetyCheck();
     bool shouldRunSchedule(const IrrigationSchedule& schedule, time_t currentTime);
     void activateValve(uint8_t channel, bool state);
-    uint8_t getChannelPin(uint8_t channel) const;
     int8_t findFreeScheduleSlot() const;
 
     // Member variables
