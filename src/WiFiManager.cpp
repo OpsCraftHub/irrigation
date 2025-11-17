@@ -314,7 +314,7 @@ void WiFiManager::setupWebServer() {
                     "p{font-size:1.2em;margin:10px;}"
                     ".info{background:rgba(255,255,255,0.2);padding:20px;border-radius:10px;margin:20px auto;max-width:400px;}"
                     "</style></head>"
-                    "<body><h1>✓ Success!</h1>"
+                    "<body><h1>Success!</h1>"
                     "<div class='info'>" +
                     ipMessage +
                     "</div>"
