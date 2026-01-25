@@ -7,7 +7,7 @@
 // FIRMWARE VERSION
 // ============================================================================
 #ifndef VERSION
-#define VERSION "1.0.9"
+#define VERSION "1.0.10"
 #endif
 
 // ============================================================================
@@ -15,11 +15,9 @@
 // ============================================================================
 
 // Multi-Channel Relay/MOSFET Outputs for Valve Control
-#define MAX_CHANNELS 4
-#define CHANNEL_1_PIN 25  // GPIO25 - Channel 1
-#define CHANNEL_2_PIN 4   // GPIO4  - Channel 2
-#define CHANNEL_3_PIN 16  // GPIO16 - Channel 3
-#define CHANNEL_4_PIN 17  // GPIO17 - Channel 4
+#define MAX_CHANNELS 2
+#define CHANNEL_1_PIN 25  // GPIO25 - Channel 1 (IN1)
+#define CHANNEL_2_PIN 4   // GPIO4  - Channel 2 (IN2)
 
 // Legacy definition for backward compatibility
 #define VALVE_PIN CHANNEL_1_PIN
@@ -180,9 +178,7 @@ struct SystemStatus {
 // Channel pin mapping array
 const uint8_t CHANNEL_PINS[MAX_CHANNELS] = {
     CHANNEL_1_PIN,
-    CHANNEL_2_PIN,
-    CHANNEL_3_PIN,
-    CHANNEL_4_PIN
+    CHANNEL_2_PIN
 };
 
 #endif // CONFIG_H

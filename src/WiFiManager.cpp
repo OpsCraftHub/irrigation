@@ -1054,6 +1054,83 @@ String WiFiManager::getStatusPage() {
             border: 1px dashed rgba(255,255,255,0.2);
             border-radius: 6px;
         }
+        .manual-control {
+            margin-top: 20px;
+            padding: 20px;
+            background: rgba(0,0,0,0.35);
+            border-radius: 10px;
+            border: 1px solid rgba(0,255,0,0.2);
+        }
+        .manual-control h2 {
+            margin: 0 0 15px 0;
+            font-size: 20px;
+            color: #00ffcc;
+        }
+        .channel-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px;
+            margin-bottom: 10px;
+            background: rgba(0,0,0,0.3);
+            border-radius: 8px;
+            border: 1px solid rgba(0,255,0,0.15);
+        }
+        .channel-row:last-child {
+            margin-bottom: 0;
+        }
+        .channel-label {
+            font-size: 16px;
+            color: #fff;
+        }
+        .channel-label .pin {
+            color: #888;
+            font-size: 12px;
+        }
+        .toggle-btns {
+            display: flex;
+            gap: 8px;
+        }
+        .toggle-btn {
+            padding: 8px 20px;
+            border: none;
+            border-radius: 5px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .toggle-btn.on {
+            background: #48bb78;
+            color: #fff;
+        }
+        .toggle-btn.on:hover {
+            background: #38a169;
+        }
+        .toggle-btn.off {
+            background: #e53e3e;
+            color: #fff;
+        }
+        .toggle-btn.off:hover {
+            background: #c53030;
+        }
+        .toggle-btn.active {
+            box-shadow: 0 0 10px currentColor;
+        }
+        .channel-status {
+            padding: 4px 10px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: bold;
+            margin-left: 10px;
+        }
+        .channel-status.running {
+            background: rgba(72,187,120,0.3);
+            color: #48bb78;
+        }
+        .channel-status.stopped {
+            background: rgba(160,160,160,0.2);
+            color: #888;
+        }
     </style>
 </head>
 <body>
@@ -1163,6 +1240,11 @@ String WiFiManager::getStatusPage() {
     page += R"rawliteral(
         </div>
 
+        <div class="manual-control">
+            <h2>Manual Control</h2>
+            <div id="manualChannels"></div>
+        </div>
+
         <div class="schedule-section">
             <div class="section-header">
                 <h2>Channel Schedules</h2>
@@ -1189,10 +1271,67 @@ String WiFiManager::getStatusPage() {
 
         <script>
         let channelMeta = [];
+        let channelStatus = {};
 
         document.addEventListener('DOMContentLoaded', function() {
             loadScheduleData();
+            loadChannelStatus();
+            setInterval(loadChannelStatus, 2000);
         });
+
+        function loadChannelStatus() {
+            fetch('/api/channels/status')
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        channelStatus = {};
+                        (data.channels || []).forEach(ch => {
+                            channelStatus[ch.channel] = ch.running;
+                        });
+                        renderManualControls();
+                    }
+                })
+                .catch(() => {});
+        }
+
+        function renderManualControls() {
+            const container = document.getElementById('manualChannels');
+            if (!container || channelMeta.length === 0) return;
+
+            let html = '';
+            channelMeta.forEach(ch => {
+                const running = channelStatus[ch.channel] || false;
+                const statusClass = running ? 'running' : 'stopped';
+                const statusText = running ? 'RUNNING' : 'OFF';
+                html += `<div class="channel-row">
+                    <div class="channel-label">
+                        Channel ${ch.channel} <span class="pin">GPIO ${ch.pin}</span>
+                        <span class="channel-status ${statusClass}">${statusText}</span>
+                    </div>
+                    <div class="toggle-btns">
+                        <button class="toggle-btn on${running ? ' active' : ''}" onclick="toggleChannel(${ch.channel}, true)">ON</button>
+                        <button class="toggle-btn off${!running ? ' active' : ''}" onclick="toggleChannel(${ch.channel}, false)">OFF</button>
+                    </div>
+                </div>`;
+            });
+            container.innerHTML = html;
+        }
+
+        function toggleChannel(channel, on) {
+            const endpoint = on ? '/api/channel/start' : '/api/channel/stop';
+            fetch(endpoint, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({channel: channel, duration: 30})
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    loadChannelStatus();
+                }
+            })
+            .catch(() => {});
+        }
 
         function loadScheduleData() {
             fetch('/api/schedules')
@@ -1206,6 +1345,7 @@ String WiFiManager::getStatusPage() {
                     channelMeta = data.channels || [];
                     renderChannelOptions();
                     renderScheduleList(data.schedules || []);
+                    renderManualControls();
                     if (channelMeta.length === 0) {
                         showScheduleMessage('No channels detected. Check Config.h pins.', true);
                     }
@@ -1782,6 +1922,92 @@ void WiFiManager::startWebServer() {
         } else {
             _webServer->send(500, "application/json", "{\"success\":false,\"message\":\"Failed to remove schedule\"}");
         }
+    });
+
+    // Channel status API
+    _webServer->on("/api/channels/status", HTTP_GET, [this]() {
+        if (!_controller) {
+            _webServer->send(500, "application/json", "{\"success\":false,\"message\":\"Controller not ready\"}");
+            return;
+        }
+
+        DynamicJsonDocument doc(512);
+        doc["success"] = true;
+
+        JsonArray channels = doc.createNestedArray("channels");
+        for (uint8_t i = 0; i < MAX_CHANNELS; i++) {
+            JsonObject ch = channels.createNestedObject();
+            ch["channel"] = i + 1;
+            ch["pin"] = CHANNEL_PINS[i];
+            ch["running"] = _controller->isChannelIrrigating(i + 1);
+        }
+
+        String json;
+        serializeJson(doc, json);
+        _webServer->send(200, "application/json", json);
+    });
+
+    // Channel start API
+    _webServer->on("/api/channel/start", HTTP_POST, [this]() {
+        if (!_controller) {
+            _webServer->send(500, "application/json", "{\"success\":false,\"message\":\"Controller not ready\"}");
+            return;
+        }
+
+        if (!_webServer->hasArg("plain")) {
+            _webServer->send(400, "application/json", "{\"success\":false,\"message\":\"Missing payload\"}");
+            return;
+        }
+
+        DynamicJsonDocument doc(256);
+        DeserializationError error = deserializeJson(doc, _webServer->arg("plain"));
+        if (error) {
+            _webServer->send(400, "application/json", "{\"success\":false,\"message\":\"Invalid JSON\"}");
+            return;
+        }
+
+        uint8_t channel = doc["channel"] | 0;
+        uint16_t duration = doc["duration"] | DEFAULT_DURATION_MINUTES;
+
+        if (channel < 1 || channel > MAX_CHANNELS) {
+            _webServer->send(400, "application/json", "{\"success\":false,\"message\":\"Invalid channel\"}");
+            return;
+        }
+
+        _controller->startIrrigation(channel, duration);
+        DEBUG_PRINTF("WiFiManager: Manual start channel %d for %d min\n", channel, duration);
+        _webServer->send(200, "application/json", "{\"success\":true,\"message\":\"Channel started\"}");
+    });
+
+    // Channel stop API
+    _webServer->on("/api/channel/stop", HTTP_POST, [this]() {
+        if (!_controller) {
+            _webServer->send(500, "application/json", "{\"success\":false,\"message\":\"Controller not ready\"}");
+            return;
+        }
+
+        if (!_webServer->hasArg("plain")) {
+            _webServer->send(400, "application/json", "{\"success\":false,\"message\":\"Missing payload\"}");
+            return;
+        }
+
+        DynamicJsonDocument doc(256);
+        DeserializationError error = deserializeJson(doc, _webServer->arg("plain"));
+        if (error) {
+            _webServer->send(400, "application/json", "{\"success\":false,\"message\":\"Invalid JSON\"}");
+            return;
+        }
+
+        uint8_t channel = doc["channel"] | 0;
+
+        if (channel < 1 || channel > MAX_CHANNELS) {
+            _webServer->send(400, "application/json", "{\"success\":false,\"message\":\"Invalid channel\"}");
+            return;
+        }
+
+        _controller->stopIrrigation(channel);
+        DEBUG_PRINTF("WiFiManager: Manual stop channel %d\n", channel);
+        _webServer->send(200, "application/json", "{\"success\":true,\"message\":\"Channel stopped\"}");
     });
 
     // MQTT configuration save
