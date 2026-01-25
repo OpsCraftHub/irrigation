@@ -40,10 +40,10 @@ bool DisplayManager::begin() {
         _lcd->backlight();
         _lcd->clear();
 
-        // Show startup message
-        showMessage("Irrigation System", "Initializing...", "Version " VERSION, "");
+        // Show startup message (16 chars max per line)
+        showMessage("* IRRIGATION *", "v" VERSION " Ready", "", "");
 
-        delay(2000); // Show startup message briefly
+        delay(1500); // Show startup message briefly
     } else {
         DEBUG_PRINTLN("DisplayManager: LCD not found, continuing without display");
         _lcd = nullptr;
@@ -106,50 +106,57 @@ void DisplayManager::drawStatusScreen() {
     if (!_lcd) return;
 
     SystemStatus status = _controller->getStatus();
-    _lcd->clear();
 
-    // Line 1: WiFi and MQTT status
-    _lcd->setCursor(0, 0);
-    _lcd->print("WiFi:");
-    _lcd->print(status.wifiConnected ? "OK " : "-- ");
-    _lcd->print("MQTT:");
-    _lcd->print(status.mqttConnected ? "OK" : "--");
+    // Get current time
+    time_t now;
+    time(&now);
+    struct tm timeinfo;
+    localtime_r(&now, &timeinfo);
 
-    // Line 2: Current status
-    _lcd->setCursor(0, 1);
+    char line1[17];
+    char line2[17];
+
+    // Line 1: Current time + WiFi indicator (16 chars)
+    // Format: "12:34 Sat    [*]" or "12:34 Sat    [ ]"
+    const char* days[] = {"Sun","Mon","Tue","Wed","Thu","Fri","Sat"};
+    snprintf(line1, 17, "%02d:%02d %s    %s",
+        timeinfo.tm_hour, timeinfo.tm_min,
+        days[timeinfo.tm_wday],
+        status.wifiConnected ? "[*]" : "[ ]");
+
+    // Line 2: Status - either running or next schedule
     if (status.irrigating) {
-        _lcd->print("IRRIGATING ");
-        if (status.manualMode) {
-            _lcd->print("(MAN)");
-        } else {
-            _lcd->print("(SCH)");
+        // Find which channel is running
+        int runningCh = 0;
+        for (int i = 0; i < MAX_CHANNELS; i++) {
+            if (status.channelIrrigating[i]) {
+                runningCh = i + 1;
+                break;
+            }
         }
-    } else {
-        _lcd->print("IDLE            ");
-    }
-
-    // Line 3: Time remaining or last run
-    _lcd->setCursor(0, 2);
-    if (status.irrigating) {
         unsigned long remaining = _controller->getTimeRemaining();
-        _lcd->print("Remaining: ");
-        _lcd->print(formatDuration(remaining));
-    } else if (status.lastIrrigationTime > 0) {
-        _lcd->print("Last: ");
-        _lcd->print(formatTime(status.lastIrrigationTime));
+        unsigned long mins = remaining / 60000;
+        unsigned long secs = (remaining % 60000) / 1000;
+        snprintf(line2, 17, "Ch%d ON    %02lu:%02lu", runningCh, mins, secs);
     } else {
-        _lcd->print("No recent run");
+        // Show next scheduled run
+        unsigned long nextTime = _controller->getNextScheduledTime();
+        if (nextTime > 0) {
+            struct tm nextInfo;
+            time_t nt = (time_t)nextTime;
+            localtime_r(&nt, &nextInfo);
+            snprintf(line2, 17, "Next %02d:%02d Ch%d",
+                nextInfo.tm_hour, nextInfo.tm_min, 1);
+        } else {
+            snprintf(line2, 17, "No schedules");
+        }
     }
 
-    // Line 4: Next scheduled run
-    _lcd->setCursor(0, 3);
-    unsigned long nextTime = _controller->getNextScheduledTime();
-    if (nextTime > 0) {
-        _lcd->print("Next: ");
-        _lcd->print(formatTime(nextTime));
-    } else {
-        _lcd->print("No schedules");
-    }
+    // Only update if changed (reduces flicker)
+    _lcd->setCursor(0, 0);
+    _lcd->print(line1);
+    _lcd->setCursor(0, 1);
+    _lcd->print(line2);
 }
 
 void DisplayManager::drawMenuScreen() {
