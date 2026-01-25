@@ -29,20 +29,24 @@ IrrigationController::~IrrigationController() {
 bool IrrigationController::begin() {
     DEBUG_PRINTLN("IrrigationController: Initializing...");
 
-    // Configure all channel pins
-    for (uint8_t i = 0; i < MAX_CHANNELS; i++) {
-        pinMode(CHANNEL_PINS[i], OUTPUT);
-        digitalWrite(CHANNEL_PINS[i], LOW);
-        _status.channelIrrigating[i] = false;
-        _status.channelStartTime[i] = 0;
-        _status.channelDuration[i] = 0;
-    }
-
-    // Initialize SPIFFS for storage
+    // Initialize SPIFFS for storage first (needed for loading settings)
     if (!SPIFFS.begin(true)) {
         DEBUG_PRINTLN("IrrigationController: SPIFFS mount failed");
         _status.lastError = "SPIFFS failed";
         return false;
+    }
+
+    // Load channel settings (invert flags)
+    loadChannelSettings();
+
+    // Configure all channel pins
+    for (uint8_t i = 0; i < MAX_CHANNELS; i++) {
+        pinMode(CHANNEL_PINS[i], OUTPUT);
+        // Set initial state: OFF (respecting invert setting)
+        digitalWrite(CHANNEL_PINS[i], _status.channelInverted[i] ? HIGH : LOW);
+        _status.channelIrrigating[i] = false;
+        _status.channelStartTime[i] = 0;
+        _status.channelDuration[i] = 0;
     }
 
     // Load schedules from storage
@@ -236,8 +240,11 @@ void IrrigationController::activateValve(uint8_t channel, bool state) {
     }
 
     uint8_t pin = CHANNEL_PINS[channel - 1];
-    digitalWrite(pin, state ? HIGH : LOW);
-    DEBUG_PRINTF("IrrigationController: Channel %d (GPIO %d) %s\n", channel, pin, state ? "ON" : "OFF");
+    bool inverted = _status.channelInverted[channel - 1];
+    // If inverted (active-low relay): ON = LOW, OFF = HIGH
+    bool pinState = inverted ? !state : state;
+    digitalWrite(pin, pinState ? HIGH : LOW);
+    DEBUG_PRINTF("IrrigationController: Channel %d (GPIO %d) %s (inv:%d)\n", channel, pin, state ? "ON" : "OFF", inverted);
 }
 
 // Helper methods
@@ -521,4 +528,79 @@ bool IrrigationController::loadSchedules() {
 void IrrigationController::setCurrentTime(time_t time) {
     _currentTime = time;
     _hasValidTime = (time > 0);
+}
+
+// Channel invert settings
+bool IrrigationController::isChannelInverted(uint8_t channel) const {
+    if (channel < 1 || channel > MAX_CHANNELS) return false;
+    return _status.channelInverted[channel - 1];
+}
+
+void IrrigationController::setChannelInverted(uint8_t channel, bool inverted) {
+    if (channel < 1 || channel > MAX_CHANNELS) return;
+    _status.channelInverted[channel - 1] = inverted;
+
+    // Update the pin state immediately if not irrigating
+    if (!_status.channelIrrigating[channel - 1]) {
+        uint8_t pin = CHANNEL_PINS[channel - 1];
+        digitalWrite(pin, inverted ? HIGH : LOW);  // OFF state
+    }
+
+    saveChannelSettings();
+    DEBUG_PRINTF("IrrigationController: Channel %d invert set to %d\n", channel, inverted);
+}
+
+bool IrrigationController::saveChannelSettings() {
+    StaticJsonDocument<256> doc;
+
+    JsonArray inverted = doc.createNestedArray("inverted");
+    for (uint8_t i = 0; i < MAX_CHANNELS; i++) {
+        inverted.add(_status.channelInverted[i]);
+    }
+
+    File file = SPIFFS.open("/channel_settings.json", "w");
+    if (!file) {
+        DEBUG_PRINTLN("IrrigationController: Failed to open channel settings for writing");
+        return false;
+    }
+
+    serializeJson(doc, file);
+    file.close();
+    DEBUG_PRINTLN("IrrigationController: Channel settings saved");
+    return true;
+}
+
+bool IrrigationController::loadChannelSettings() {
+    // Initialize defaults
+    for (uint8_t i = 0; i < MAX_CHANNELS; i++) {
+        _status.channelInverted[i] = false;
+    }
+
+    if (!SPIFFS.exists("/channel_settings.json")) {
+        DEBUG_PRINTLN("IrrigationController: No channel settings file, using defaults");
+        return false;
+    }
+
+    File file = SPIFFS.open("/channel_settings.json", "r");
+    if (!file) {
+        DEBUG_PRINTLN("IrrigationController: Failed to open channel settings");
+        return false;
+    }
+
+    StaticJsonDocument<256> doc;
+    DeserializationError error = deserializeJson(doc, file);
+    file.close();
+
+    if (error) {
+        DEBUG_PRINTF("IrrigationController: Failed to parse channel settings: %s\n", error.c_str());
+        return false;
+    }
+
+    JsonArray inverted = doc["inverted"];
+    for (uint8_t i = 0; i < MAX_CHANNELS && i < inverted.size(); i++) {
+        _status.channelInverted[i] = inverted[i] | false;
+    }
+
+    DEBUG_PRINTLN("IrrigationController: Channel settings loaded");
+    return true;
 }

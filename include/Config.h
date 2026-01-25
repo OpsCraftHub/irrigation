@@ -165,6 +165,7 @@ struct SystemStatus {
     bool mqttConnected;
     bool irrigating;           // True if any channel is irrigating
     bool channelIrrigating[MAX_CHANNELS];  // Per-channel irrigation status
+    bool channelInverted[MAX_CHANNELS];    // Per-channel invert setting (for active-low relays)
     bool manualMode;
     unsigned long irrigationStartTime;
     unsigned long channelStartTime[MAX_CHANNELS];  // Per-channel start times

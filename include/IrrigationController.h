@@ -45,6 +45,12 @@ public:
     unsigned long getNextScheduledTime() const;
     uint8_t getChannelPin(uint8_t channel) const;
 
+    // Channel invert settings
+    bool isChannelInverted(uint8_t channel) const;
+    void setChannelInverted(uint8_t channel, bool inverted);
+    bool saveChannelSettings();
+    bool loadChannelSettings();
+
     // Time management
     void setCurrentTime(time_t time);
     time_t getCurrentTime() const { return _currentTime; }

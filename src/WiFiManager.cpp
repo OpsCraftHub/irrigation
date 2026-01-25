@@ -1116,6 +1116,21 @@ String WiFiManager::getStatusPage() {
         .toggle-btn.active {
             box-shadow: 0 0 10px currentColor;
         }
+        .invert-btn {
+            padding: 6px 12px;
+            border: 1px solid #888;
+            border-radius: 4px;
+            background: transparent;
+            color: #888;
+            font-size: 11px;
+            cursor: pointer;
+            margin-left: 8px;
+        }
+        .invert-btn.active {
+            border-color: #f6ad55;
+            color: #f6ad55;
+            background: rgba(246,173,85,0.1);
+        }
         .channel-status {
             padding: 4px 10px;
             border-radius: 4px;
@@ -1272,6 +1287,7 @@ String WiFiManager::getStatusPage() {
         <script>
         let channelMeta = [];
         let channelStatus = {};
+        let channelInverted = {};
 
         document.addEventListener('DOMContentLoaded', function() {
             loadScheduleData();
@@ -1285,8 +1301,10 @@ String WiFiManager::getStatusPage() {
                 .then(data => {
                     if (data.success) {
                         channelStatus = {};
+                        channelInverted = {};
                         (data.channels || []).forEach(ch => {
                             channelStatus[ch.channel] = ch.running;
+                            channelInverted[ch.channel] = ch.inverted;
                         });
                         renderManualControls();
                     }
@@ -1301,12 +1319,14 @@ String WiFiManager::getStatusPage() {
             let html = '';
             channelMeta.forEach(ch => {
                 const running = channelStatus[ch.channel] || false;
+                const inverted = channelInverted[ch.channel] || false;
                 const statusClass = running ? 'running' : 'stopped';
                 const statusText = running ? 'RUNNING' : 'OFF';
                 html += `<div class="channel-row">
                     <div class="channel-label">
                         Channel ${ch.channel} <span class="pin">GPIO ${ch.pin}</span>
                         <span class="channel-status ${statusClass}">${statusText}</span>
+                        <button class="invert-btn${inverted ? ' active' : ''}" onclick="toggleInvert(${ch.channel})">INV</button>
                     </div>
                     <div class="toggle-btns">
                         <button class="toggle-btn on${running ? ' active' : ''}" onclick="toggleChannel(${ch.channel}, true)">ON</button>
@@ -1323,6 +1343,22 @@ String WiFiManager::getStatusPage() {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({channel: channel, duration: 30})
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    loadChannelStatus();
+                }
+            })
+            .catch(() => {});
+        }
+
+        function toggleInvert(channel) {
+            const current = channelInverted[channel] || false;
+            fetch('/api/channel/invert', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({channel: channel, inverted: !current})
             })
             .then(response => response.json())
             .then(data => {
@@ -1940,11 +1976,44 @@ void WiFiManager::startWebServer() {
             ch["channel"] = i + 1;
             ch["pin"] = CHANNEL_PINS[i];
             ch["running"] = _controller->isChannelIrrigating(i + 1);
+            ch["inverted"] = _controller->isChannelInverted(i + 1);
         }
 
         String json;
         serializeJson(doc, json);
         _webServer->send(200, "application/json", json);
+    });
+
+    // Channel invert API
+    _webServer->on("/api/channel/invert", HTTP_POST, [this]() {
+        if (!_controller) {
+            _webServer->send(500, "application/json", "{\"success\":false,\"message\":\"Controller not ready\"}");
+            return;
+        }
+
+        if (!_webServer->hasArg("plain")) {
+            _webServer->send(400, "application/json", "{\"success\":false,\"message\":\"Missing payload\"}");
+            return;
+        }
+
+        DynamicJsonDocument doc(256);
+        DeserializationError error = deserializeJson(doc, _webServer->arg("plain"));
+        if (error) {
+            _webServer->send(400, "application/json", "{\"success\":false,\"message\":\"Invalid JSON\"}");
+            return;
+        }
+
+        uint8_t channel = doc["channel"] | 0;
+        bool inverted = doc["inverted"] | false;
+
+        if (channel < 1 || channel > MAX_CHANNELS) {
+            _webServer->send(400, "application/json", "{\"success\":false,\"message\":\"Invalid channel\"}");
+            return;
+        }
+
+        _controller->setChannelInverted(channel, inverted);
+        DEBUG_PRINTF("WiFiManager: Channel %d invert set to %d\n", channel, inverted);
+        _webServer->send(200, "application/json", "{\"success\":true,\"message\":\"Invert setting updated\"}");
     });
 
     // Channel start API
