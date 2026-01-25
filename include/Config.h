@@ -29,9 +29,9 @@
 #define BTN_SELECT 27  // Select/confirm in menu
 
 // LCD I2C Configuration
-#define LCD_ADDRESS 0x27  // Common I2C address for LCD
-#define LCD_COLS 20       // 20x4 LCD
-#define LCD_ROWS 4
+#define LCD_ADDRESS 0x27  // Common I2C address for LCD (try 0x3F if not working)
+#define LCD_COLS 16       // 16x2 LCD
+#define LCD_ROWS 2
 #define LCD_SDA 21        // I2C SDA pin
 #define LCD_SCL 22        // I2C SCL pin
 
