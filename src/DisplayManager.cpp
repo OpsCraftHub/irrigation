@@ -125,7 +125,7 @@ void DisplayManager::drawStatusScreen() {
     // Format: "12:34 Sat    [*]"
     const char* days[] = {"Sun","Mon","Tue","Wed","Thu","Fri","Sat"};
     bool wifiOk = (WiFi.status() == WL_CONNECTED);
-    snprintf(line1, 17, "%02d:%02d %s   %s",
+    snprintf(line1, 17, "%02d:%02d %s  %s ",
         timeinfo.tm_hour, timeinfo.tm_min,
         days[timeinfo.tm_wday],
         wifiOk ? "[*]" : "[ ]");
@@ -157,6 +157,12 @@ void DisplayManager::drawStatusScreen() {
             snprintf(line2, 17, "No schedules    ");
         }
     }
+
+    // Pad strings to exactly 16 chars
+    for (int i = strlen(line1); i < 16; i++) line1[i] = ' ';
+    for (int i = strlen(line2); i < 16; i++) line2[i] = ' ';
+    line1[16] = '\0';
+    line2[16] = '\0';
 
     _lcd->setCursor(0, 0);
     _lcd->print(line1);
