@@ -1,5 +1,6 @@
 #include "DisplayManager.h"
 #include <time.h>
+#include <WiFi.h>
 
 DisplayManager::DisplayManager(IrrigationController* controller)
     : _lcd(nullptr),
@@ -115,19 +116,24 @@ void DisplayManager::drawStatusScreen() {
 
     char line1[17];
     char line2[17];
+    memset(line1, ' ', 16);
+    memset(line2, ' ', 16);
+    line1[16] = '\0';
+    line2[16] = '\0';
 
     // Line 1: Current time + WiFi indicator (16 chars)
-    // Format: "12:34 Sat    [*]" or "12:34 Sat    [ ]"
+    // Format: "12:34 Sat    [*]"
     const char* days[] = {"Sun","Mon","Tue","Wed","Thu","Fri","Sat"};
-    snprintf(line1, 17, "%02d:%02d %s    %s",
+    bool wifiOk = (WiFi.status() == WL_CONNECTED);
+    snprintf(line1, 17, "%02d:%02d %s   %s",
         timeinfo.tm_hour, timeinfo.tm_min,
         days[timeinfo.tm_wday],
-        status.wifiConnected ? "[*]" : "[ ]");
+        wifiOk ? "[*]" : "[ ]");
 
     // Line 2: Status - either running or next schedule
     if (status.irrigating) {
         // Find which channel is running
-        int runningCh = 0;
+        int runningCh = 1;
         for (int i = 0; i < MAX_CHANNELS; i++) {
             if (status.channelIrrigating[i]) {
                 runningCh = i + 1;
@@ -137,7 +143,7 @@ void DisplayManager::drawStatusScreen() {
         unsigned long remaining = _controller->getTimeRemaining();
         unsigned long mins = remaining / 60000;
         unsigned long secs = (remaining % 60000) / 1000;
-        snprintf(line2, 17, "Ch%d ON    %02lu:%02lu", runningCh, mins, secs);
+        snprintf(line2, 17, "Ch%d RUN   %02lu:%02lu", runningCh, mins, secs);
     } else {
         // Show next scheduled run
         unsigned long nextTime = _controller->getNextScheduledTime();
@@ -145,14 +151,13 @@ void DisplayManager::drawStatusScreen() {
             struct tm nextInfo;
             time_t nt = (time_t)nextTime;
             localtime_r(&nt, &nextInfo);
-            snprintf(line2, 17, "Next %02d:%02d Ch%d",
-                nextInfo.tm_hour, nextInfo.tm_min, 1);
+            snprintf(line2, 17, "Next %02d:%02d     ",
+                nextInfo.tm_hour, nextInfo.tm_min);
         } else {
-            snprintf(line2, 17, "No schedules");
+            snprintf(line2, 17, "No schedules    ");
         }
     }
 
-    // Only update if changed (reduces flicker)
     _lcd->setCursor(0, 0);
     _lcd->print(line1);
     _lcd->setCursor(0, 1);
