@@ -90,6 +90,10 @@ void setup() {
         displayManager->showMessage("WiFi Setup Mode", "Connect to:", WIFI_AP_NAME, "to configure WiFi");
     } else {
         DEBUG_PRINTLN("WiFiManager: Connected successfully");
+        // Flash IP address on screen for 3 seconds
+        String ipLine = WiFi.localIP().toString();
+        displayManager->showMessage("WiFi Connected!", ipLine.c_str(), "", "");
+        delay(3000);
     }
 
     // Set time update callback
