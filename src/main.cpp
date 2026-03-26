@@ -31,12 +31,20 @@ WiFiManager* wifiManager = nullptr;
 HomeAssistantIntegration* homeAssistant = nullptr;
 NodeManager* nodeManager = nullptr;
 
-// Feature flags — defaults: web_ui and ota on, everything else off
+// Feature flags — Board B defaults to multi_node on (it's a slave)
+#ifdef BOARD_B
+Features features = {true, false, true, false, false, true, false};
+#else
 Features features = {false, false, true, false, false, true, false};
+#endif
 
 // Node identity
 String nodeId = DEFAULT_NODE_ID;
+#ifdef BOARD_B
+String nodeRole = "slave";
+#else
 String nodeRole = DEFAULT_ROLE;
+#endif
 String nodeName = "Slave";  // Human-readable name for pairing
 
 // System status
