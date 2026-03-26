@@ -157,11 +157,25 @@ bool NodeManager::discoverMaster() {
     }
 
     for (int i = 0; i < n; i++) {
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
         _masterIp = MDNS.address(i);
+#else
+        _masterIp = MDNS.IP(i);
+#endif
         _masterPort = MDNS.port(i);
 
         // Try to extract master's node_id from mDNS TXT record
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
         String id = MDNS.txt(i, "id");
+#else
+        String id = "";
+        for (int t = 0; t < MDNS.numTxt(i); t++) {
+            if (String(MDNS.txtKey(i, t)) == "id") {
+                id = MDNS.txt(i, t);
+                break;
+            }
+        }
+#endif
         if (id.length() > 0 && _masterNodeId[0] == '\0') {
             strncpy(_masterNodeId, id.c_str(), sizeof(_masterNodeId) - 1);
             _masterNodeId[sizeof(_masterNodeId) - 1] = '\0';
