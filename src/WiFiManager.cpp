@@ -760,6 +760,7 @@ bool WiFiManager::checkGitHubVersion(String& latestVersion) {
     DEBUG_PRINTF("WiFiManager: Checking version at: %s\n", url.c_str());
 
     http.begin(client, url);
+    http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
     int httpCode = http.GET();
 
     if (httpCode == HTTP_CODE_OK) {
@@ -804,52 +805,44 @@ bool WiFiManager::downloadFirmware(const String& url) {
     HTTPClient http;
     WiFiClientSecure client;
     client.setInsecure();  // Skip cert validation for GitHub
+
     http.begin(client, url);
+    http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+    http.setTimeout(60000);  // 60s timeout for large file
+
+    DEBUG_PRINTF("WiFiManager: Free heap before download: %d\n", ESP.getFreeHeap());
 
     int httpCode = http.GET();
+    DEBUG_PRINTF("WiFiManager: HTTP response code: %d\n", httpCode);
+
     if (httpCode != HTTP_CODE_OK) {
-        DEBUG_PRINTF("WiFiManager: Download failed, error: %s\n",
-                     http.errorToString(httpCode).c_str());
+        DEBUG_PRINTF("WiFiManager: Download failed, HTTP %d: %s\n",
+                     httpCode, http.errorToString(httpCode).c_str());
         http.end();
         return false;
     }
 
     int contentLength = http.getSize();
+    DEBUG_PRINTF("WiFiManager: Content-Length: %d\n", contentLength);
+
     if (contentLength <= 0) {
-        DEBUG_PRINTLN("WiFiManager: Invalid content length");
+        DEBUG_PRINTLN("WiFiManager: No Content-Length, cannot determine size");
         http.end();
         return false;
     }
 
     bool canBegin = Update.begin(contentLength);
     if (!canBegin) {
-        DEBUG_PRINTLN("WiFiManager: Not enough space for OTA");
+        DEBUG_PRINTF("WiFiManager: Not enough space for OTA (need %d)\n", contentLength);
         http.end();
         return false;
     }
 
+    // Use writeStream for efficient memory usage — handles buffering internally
     WiFiClient* stream = http.getStreamPtr();
-    size_t written = 0;
-    uint8_t buff[128];
-
-    DEBUG_PRINTF("WiFiManager: Starting update, size: %d bytes\n", contentLength);
-
-    while (http.connected() && (written < contentLength)) {
-        size_t available = stream->available();
-        if (available) {
-            int bytesRead = stream->readBytes(buff, min(available, sizeof(buff)));
-            written += Update.write(buff, bytesRead);
-
-            // Print progress
-            if (contentLength > 0) {
-                int progress = (written * 100) / contentLength;
-                DEBUG_PRINTF("WiFiManager: Update progress: %d%%\r", progress);
-            }
-        }
-        delay(1);
-    }
-
-    DEBUG_PRINTLN();
+    DEBUG_PRINTF("WiFiManager: Starting firmware write, size: %d bytes\n", contentLength);
+    size_t written = Update.writeStream(*stream);
+    DEBUG_PRINTF("WiFiManager: Written %d of %d bytes\n", written, contentLength);
 
     if (Update.end()) {
         if (Update.isFinished()) {
