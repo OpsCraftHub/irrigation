@@ -628,7 +628,7 @@ bool IrrigationController::loadChannelSettings() {
         return false;
     }
 
-    StaticJsonDocument<256> doc;
+    StaticJsonDocument<512> doc;
     DeserializationError error = deserializeJson(doc, file);
     file.close();
 
