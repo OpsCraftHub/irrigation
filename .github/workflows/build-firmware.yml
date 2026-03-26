@@ -85,6 +85,15 @@ jobs:
           cp firmware/board_a/firmware.bin firmware/firmware.bin
           cp firmware/board_a/version.txt firmware/version.txt
 
+          # Release assets need unique names (GitHub uses filename only, no path)
+          mkdir -p release_assets
+          cp firmware/board_a/firmware.bin release_assets/board_a_firmware.bin
+          cp firmware/board_a/version.txt release_assets/board_a_version.txt
+          cp firmware/board_b_c3/firmware.bin release_assets/board_b_c3_firmware.bin
+          cp firmware/board_b_c3/version.txt release_assets/board_b_c3_version.txt
+          cp firmware/firmware.bin release_assets/firmware.bin
+          cp firmware/version.txt release_assets/version.txt
+
       - name: Check for changes and commit everything together
         id: check_changes
         run: |
@@ -118,14 +127,14 @@ jobs:
             ## Files
             - `firmware/board_a/firmware.bin` - Board A (ESP32) firmware
             - `firmware/board_b_c3/firmware.bin` - Board B (ESP32-C3) firmware
-            - `firmware/firmware.bin` - Legacy path (Board A copy)
+            - `firmware.bin` - Legacy path (Board A copy)
           files: |
-            firmware/board_a/firmware.bin
-            firmware/board_a/version.txt
-            firmware/board_b_c3/firmware.bin
-            firmware/board_b_c3/version.txt
-            firmware/firmware.bin
-            firmware/version.txt
+            release_assets/board_a_firmware.bin
+            release_assets/board_a_version.txt
+            release_assets/board_b_c3_firmware.bin
+            release_assets/board_b_c3_version.txt
+            release_assets/firmware.bin
+            release_assets/version.txt
           draft: false
           prerelease: false
         env:
