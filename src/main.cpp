@@ -16,17 +16,20 @@
 
 
 #include <Arduino.h>
+#include <esp_mac.h>
 #include "Config.h"
 #include "IrrigationController.h"
 #include "DisplayManager.h"
 #include "WiFiManager.h"
 #include "HomeAssistantIntegration.h"
+#include "NodeManager.h"
 
 // Global objects
 IrrigationController* irrigationController = nullptr;
 DisplayManager* displayManager = nullptr;
 WiFiManager* wifiManager = nullptr;
 HomeAssistantIntegration* homeAssistant = nullptr;
+NodeManager* nodeManager = nullptr;
 
 // Feature flags — defaults: web_ui and ota on, everything else off
 Features features = {false, false, true, false, false, true, false};
@@ -34,6 +37,7 @@ Features features = {false, false, true, false, false, true, false};
 // Node identity
 String nodeId = DEFAULT_NODE_ID;
 String nodeRole = DEFAULT_ROLE;
+String nodeName = "Slave";  // Human-readable name for pairing
 
 // System status
 unsigned long lastStatusUpdate = 0;
@@ -42,15 +46,25 @@ unsigned long lastStatusUpdate = 0;
 void timeUpdateCallback(time_t currentTime);
 void updateSystemStatus();
 void loadConfiguration();
+void remoteValveHandler(uint8_t channel, bool state, uint16_t duration);
+void onPairRequest(const char* nodeId, const char* name);
+void onPairResponse(bool accepted);
+String nodeIdToDisplayName(const String& id);
 
 void setup() {
     // Initialize serial for debugging
 #if ENABLE_SERIAL_DEBUG
     Serial.begin(SERIAL_BAUD_RATE);
-    while (!Serial && millis() < 3000); // Wait up to 3 seconds for serial
+#ifdef BOARD_B
+    // C3 USB-CDC drops connection on reset — need longer wait for re-enumeration
+    delay(3000);
+#else
+    while (!Serial && millis() < 3000);
+#endif
     DEBUG_PRINTLN("\n\n==================================");
     DEBUG_PRINTLN("ESP32 Irrigation Controller");
     DEBUG_PRINTLN("Version: " VERSION);
+    DEBUG_PRINTF("MAC: %s\n", WiFi.macAddress().c_str());
 #ifdef BOARD_B
     DEBUG_PRINTLN("Board: B (ESP32-C3)");
 #else
@@ -120,6 +134,8 @@ void setup() {
 #endif
     } else {
         DEBUG_PRINTLN("WiFiManager: Connected successfully");
+        DEBUG_PRINTF("IP Address: %s\n", WiFi.localIP().toString().c_str());
+        DEBUG_PRINTF("MAC Address: %s\n", WiFi.macAddress().c_str());
 #if LCD_ROWS > 0
         if (displayManager) {
             // Flash IP address on screen for 3 seconds
@@ -132,6 +148,41 @@ void setup() {
 
     // Set time update callback
     wifiManager->setTimeUpdateCallback(timeUpdateCallback);
+
+    // Initialize NodeManager (UDP + mDNS) — only if multi_node feature enabled
+    if (features.multi_node) {
+        DEBUG_PRINTLN("Initializing NodeManager (UDP + mDNS)...");
+        nodeManager = new NodeManager();
+        nodeManager->setController(irrigationController);
+        nodeManager->setNodeId(nodeId.c_str());
+
+        if (nodeRole == "master") {
+            nodeManager->setRole(NODE_ROLE_MASTER);
+        } else {
+            nodeManager->setRole(NODE_ROLE_SLAVE);
+            nodeManager->setNodeName(nodeName.c_str());
+        }
+
+        if (nodeManager->begin()) {
+            if (nodeRole == "master") {
+                // Master: set remote valve callback and pairing callback
+                irrigationController->setRemoteValveCallback(remoteValveHandler);
+                nodeManager->setPairRequestCallback(onPairRequest);
+                wifiManager->setNodeManager(nodeManager);
+#if LCD_ROWS > 0
+                if (displayManager) {
+                    displayManager->setPairResponseCallback(onPairResponse);
+                }
+#endif
+            }
+        } else {
+            DEBUG_PRINTLN("ERROR: NodeManager init failed");
+            delete nodeManager;
+            nodeManager = nullptr;
+        }
+    } else {
+        DEBUG_PRINTLN("multi_node feature disabled, skipping NodeManager");
+    }
 
     // Show initial status
 #if LCD_ROWS > 0
@@ -147,6 +198,11 @@ void setup() {
 
     DEBUG_PRINTLN("\n==================================");
     DEBUG_PRINTLN("System initialized successfully!");
+    DEBUG_PRINTLN("Version: " VERSION);
+    DEBUG_PRINTF("MAC: %s\n", WiFi.macAddress().c_str());
+    if (wifiManager->isConnected()) {
+        DEBUG_PRINTF("IP: %s\n", WiFi.localIP().toString().c_str());
+    }
     DEBUG_PRINTF("Features: mqtt=%d web_ui=%d ota=%d debug=%d\n",
                  features.mqtt, features.web_ui, features.ota, features.debug);
     DEBUG_PRINTLN("==================================\n");
@@ -163,6 +219,8 @@ void loop() {
     wifiManager->update();
 
     if (features.mqtt && homeAssistant) homeAssistant->update();
+
+    if (features.multi_node && nodeManager) nodeManager->update();
 
     // Update system status periodically
     unsigned long currentMillis = millis();
@@ -235,6 +293,57 @@ void updateSystemStatus() {
                  status.irrigating ? "YES" : "NO");
 }
 
+void remoteValveHandler(uint8_t channel, bool state, uint16_t duration) {
+    if (!nodeManager) return;
+    if (state) {
+        nodeManager->sendStart(channel, duration);
+    } else {
+        nodeManager->sendStop(channel);
+    }
+}
+
+void onPairRequest(const char* nodeId, const char* name) {
+    DEBUG_PRINTF("Pair request from '%s' (%s)\n", name, nodeId);
+#if LCD_ROWS > 0
+    if (displayManager) {
+        displayManager->showPairRequest(nodeId, name);
+    }
+#endif
+    // Web UI polls /api/nodes/pending automatically
+}
+
+void onPairResponse(bool accepted) {
+    if (!nodeManager) return;
+    if (accepted) {
+        DEBUG_PRINTLN("User accepted pair request");
+        nodeManager->acceptPendingPair();
+#if LCD_ROWS > 0
+        if (displayManager) {
+            displayManager->clearPairRequest();
+        }
+#endif
+    } else {
+        DEBUG_PRINTLN("User rejected pair request");
+        nodeManager->rejectPendingPair(PAIR_REJECT_USER);
+    }
+}
+
+// Convert node_id like "far_tap" to display name "Far Tap"
+String nodeIdToDisplayName(const String& id) {
+    String name = id;
+    name.replace('_', ' ');
+    bool capNext = true;
+    for (unsigned int i = 0; i < name.length(); i++) {
+        if (name[i] == ' ') {
+            capNext = true;
+        } else if (capNext) {
+            name[i] = toupper(name[i]);
+            capNext = false;
+        }
+    }
+    return name;
+}
+
 void loadConfiguration() {
     DEBUG_PRINTLN("Loading configuration from SPIFFS...");
 
@@ -249,9 +358,16 @@ void loadConfiguration() {
         DEBUG_PRINTLN("SPIFFS formatted successfully");
     }
 
-    // Check if config file exists
+    // Auto-generate unique node_id from MAC if no config exists
     if (!SPIFFS.exists(CONFIG_FILE)) {
         DEBUG_PRINTLN("No configuration file found, using defaults");
+        uint8_t mac[6];
+        esp_efuse_mac_get_default(mac);
+        char autoId[12];
+        snprintf(autoId, sizeof(autoId), "node_%02x%02x", mac[4], mac[5]);
+        nodeId = autoId;
+        nodeName = nodeIdToDisplayName(nodeId);
+        DEBUG_PRINTF("Auto-generated node_id: %s (%s)\n", nodeId.c_str(), nodeName.c_str());
         return;
     }
 
@@ -275,6 +391,20 @@ void loadConfiguration() {
     nodeId = doc["node_id"] | DEFAULT_NODE_ID;
     nodeRole = doc["role"] | DEFAULT_ROLE;
 
+    // If node_id is default, auto-generate a unique one from MAC
+    if (nodeId == DEFAULT_NODE_ID) {
+        uint8_t mac[6];
+        esp_efuse_mac_get_default(mac);
+        char autoId[12];
+        snprintf(autoId, sizeof(autoId), "node_%02x%02x", mac[4], mac[5]);
+        nodeId = autoId;
+        DEBUG_PRINTF("Auto-generated node_id: %s\n", nodeId.c_str());
+    }
+
+    // Display name: explicit node_name wins, otherwise derive from node_id
+    const char* explicitName = doc["node_name"] | "";
+    nodeName = (strlen(explicitName) > 0) ? String(explicitName) : nodeIdToDisplayName(nodeId);
+
     // Read feature flags
     JsonObject feat = doc["features"];
     if (!feat.isNull()) {
@@ -288,5 +418,5 @@ void loadConfiguration() {
     }
 
     DEBUG_PRINTLN("Configuration loaded successfully");
-    DEBUG_PRINTF("Node: %s, Role: %s\n", nodeId.c_str(), nodeRole.c_str());
+    DEBUG_PRINTF("Node: %s, Role: %s, Name: %s\n", nodeId.c_str(), nodeRole.c_str(), nodeName.c_str());
 }

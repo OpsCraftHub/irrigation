@@ -6,6 +6,9 @@
 #include <ArduinoJson.h>
 #include "Config.h"
 
+// Callback for routing valve commands to remote nodes
+typedef void (*RemoteValveCallback)(uint8_t channel, bool state, uint16_t duration);
+
 class IrrigationController {
 public:
     IrrigationController();
@@ -51,6 +54,10 @@ public:
     bool saveChannelSettings();
     bool loadChannelSettings();
 
+    // Remote valve support (ESP-NOW virtual channels)
+    void setRemoteValveCallback(RemoteValveCallback cb) { _remoteValveCallback = cb; }
+    void setRemoteChannelStatus(uint8_t channel, bool irrigating, uint16_t remainingSec);
+
     // Time management
     void setCurrentTime(time_t time);
     time_t getCurrentTime() const { return _currentTime; }
@@ -73,6 +80,7 @@ private:
     unsigned long _lastScheduleCheck;
     unsigned long _irrigationStartMillis;
     uint16_t _currentDurationMinutes;
+    RemoteValveCallback _remoteValveCallback = nullptr;
 };
 
 #endif // IRRIGATION_CONTROLLER_H

@@ -11,12 +11,19 @@
 #endif
 
 // ============================================================================
+// MULTI-NODE SETTINGS
+// ============================================================================
+
+#define MAX_SLAVES 8  // Max slave nodes a master can track
+
+// ============================================================================
 // PIN DEFINITIONS (Board-Aware)
 // ============================================================================
 
 #ifdef BOARD_B
     // ESP32-C3 (Board B slave) — single channel, no LCD, no buttons
     #define MAX_CHANNELS 1
+    #define NUM_LOCAL_CHANNELS 1
     #define CHANNEL_1_PIN 5
 
     // No buttons on Board B
@@ -38,9 +45,14 @@
     #define STATUS_LED_PIN 3
 #else
     // ESP32 (Board A master) — multi-channel, LCD, buttons
-    #define MAX_CHANNELS 2
-    #define CHANNEL_1_PIN 25  // GPIO25 - Channel 1 (IN1)
-    #define CHANNEL_2_PIN 4   // GPIO4  - Channel 2 (IN2)
+    #define MAX_CHANNELS (NUM_LOCAL_CHANNELS + MAX_SLAVES)  // 6 local + up to 4 virtual
+    #define NUM_LOCAL_CHANNELS 6    // PCB has 6 MOSFET channels
+    #define CHANNEL_1_PIN 25  // GPIO25 - Channel 1 (wired)
+    #define CHANNEL_2_PIN 4   // GPIO4  - Channel 2 (wired)
+    #define CHANNEL_3_PIN 14  // GPIO14 - Channel 3 (not yet wired)
+    #define CHANNEL_4_PIN 16  // GPIO16 - Channel 4 (not yet wired)
+    #define CHANNEL_5_PIN 17  // GPIO17 - Channel 5 (not yet wired)
+    #define CHANNEL_6_PIN 18  // GPIO18 - Channel 6 (not yet wired)
 
     // Button Inputs (active LOW with internal pullup)
     #define BTN_START 32   // Start irrigation manually
@@ -148,6 +160,8 @@
 #define SCHEDULE_FILE "/schedule.json"
 #define LOG_FILE "/irrigation.log"
 #define MAX_LOG_ENTRIES 100
+#define PAIRED_SLAVES_FILE "/paired_slaves.json"
+#define PAIRED_MASTER_FILE "/paired_master.json"
 
 // ============================================================================
 // TIMING CONSTANTS
@@ -225,16 +239,30 @@ struct SystemStatus {
     String lastError;
 };
 
-// Channel pin mapping array
+// Channel pin mapping array — only local (GPIO-driven) channels
 #ifdef BOARD_B
-const uint8_t CHANNEL_PINS[MAX_CHANNELS] = {
+const uint8_t CHANNEL_PINS[NUM_LOCAL_CHANNELS] = {
     CHANNEL_1_PIN
 };
 #else
-const uint8_t CHANNEL_PINS[MAX_CHANNELS] = {
-    CHANNEL_1_PIN,
-    CHANNEL_2_PIN
+const uint8_t CHANNEL_PINS[NUM_LOCAL_CHANNELS] = {
+    CHANNEL_1_PIN, CHANNEL_2_PIN, CHANNEL_3_PIN,
+    CHANNEL_4_PIN, CHANNEL_5_PIN, CHANNEL_6_PIN
 };
 #endif
+
+// ============================================================================
+// NODE NETWORKING (UDP + mDNS)
+// ============================================================================
+
+#define NODE_UDP_PORT             4210    // UDP port for node communication
+#define NODE_HEARTBEAT_INTERVAL   30000   // Send heartbeat every 30s
+#define NODE_STATUS_INTERVAL      10000   // Slave sends status every 10s
+#define NODE_PEER_TIMEOUT         90000   // Mark peer offline after 90s silence
+#define NODE_MAX_RETRIES          3       // Retry count for ACK-requiring commands
+#define NODE_DEDUP_WINDOW         60000   // Dedup seq numbers for 60s
+#define NODE_MDNS_RETRY_INTERVAL  30000   // Retry mDNS discovery every 30s
+#define NODE_PAIR_RETRY_INTERVAL  30000   // Slave retries PAIR_REQUEST every 30s
+#define NODE_PAIR_REQUEST_TIMEOUT 60000   // Master auto-rejects pending pair after 60s
 
 #endif // CONFIG_H

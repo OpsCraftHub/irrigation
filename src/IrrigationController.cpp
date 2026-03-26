@@ -39,11 +39,14 @@ bool IrrigationController::begin() {
     // Load channel settings (invert flags)
     loadChannelSettings();
 
-    // Configure all channel pins
-    for (uint8_t i = 0; i < MAX_CHANNELS; i++) {
+    // Configure local (GPIO) channel pins
+    for (uint8_t i = 0; i < NUM_LOCAL_CHANNELS; i++) {
         pinMode(CHANNEL_PINS[i], OUTPUT);
         // Set initial state: OFF (respecting invert setting)
         digitalWrite(CHANNEL_PINS[i], _status.channelInverted[i] ? HIGH : LOW);
+    }
+    // Initialize status for ALL channels (local + virtual)
+    for (uint8_t i = 0; i < MAX_CHANNELS; i++) {
         _status.channelIrrigating[i] = false;
         _status.channelStartTime[i] = 0;
         _status.channelDuration[i] = 0;
@@ -239,17 +242,33 @@ void IrrigationController::activateValve(uint8_t channel, bool state) {
         return;
     }
 
-    uint8_t pin = CHANNEL_PINS[channel - 1];
-    bool inverted = _status.channelInverted[channel - 1];
-    // If inverted (active-low relay): ON = LOW, OFF = HIGH
-    bool pinState = inverted ? !state : state;
-    digitalWrite(pin, pinState ? HIGH : LOW);
-    DEBUG_PRINTF("IrrigationController: Channel %d (GPIO %d) %s (inv:%d)\n", channel, pin, state ? "ON" : "OFF", inverted);
+    uint8_t idx = channel - 1;
+
+    if (idx < NUM_LOCAL_CHANNELS) {
+        // Local GPIO channel
+        uint8_t pin = CHANNEL_PINS[idx];
+        bool inverted = _status.channelInverted[idx];
+        bool pinState = inverted ? !state : state;
+        digitalWrite(pin, pinState ? HIGH : LOW);
+        DEBUG_PRINTF("IrrigationController: Channel %d (GPIO %d) %s (inv:%d)\n",
+                     channel, pin, state ? "ON" : "OFF", inverted);
+    } else {
+        // Virtual (remote) channel — route through callback
+        if (_remoteValveCallback) {
+            uint16_t duration = _status.channelDuration[idx];
+            _remoteValveCallback(channel, state, duration);
+            DEBUG_PRINTF("IrrigationController: Channel %d (remote) %s\n",
+                         channel, state ? "ON" : "OFF");
+        } else {
+            DEBUG_PRINTF("IrrigationController: Channel %d is virtual but no remote callback set\n", channel);
+        }
+    }
 }
 
 // Helper methods
 uint8_t IrrigationController::getChannelPin(uint8_t channel) const {
     if (channel < 1 || channel > MAX_CHANNELS) return 0;
+    if (channel - 1 >= NUM_LOCAL_CHANNELS) return 0;  // Virtual channel — no GPIO pin
     return CHANNEL_PINS[channel - 1];
 }
 
@@ -540,8 +559,8 @@ void IrrigationController::setChannelInverted(uint8_t channel, bool inverted) {
     if (channel < 1 || channel > MAX_CHANNELS) return;
     _status.channelInverted[channel - 1] = inverted;
 
-    // Update the pin state immediately if not irrigating
-    if (!_status.channelIrrigating[channel - 1]) {
+    // Update the pin state immediately if not irrigating (local channels only)
+    if (channel - 1 < NUM_LOCAL_CHANNELS && !_status.channelIrrigating[channel - 1]) {
         uint8_t pin = CHANNEL_PINS[channel - 1];
         digitalWrite(pin, inverted ? HIGH : LOW);  // OFF state
     }
@@ -603,4 +622,33 @@ bool IrrigationController::loadChannelSettings() {
 
     DEBUG_PRINTLN("IrrigationController: Channel settings loaded");
     return true;
+}
+
+void IrrigationController::setRemoteChannelStatus(uint8_t channel, bool irrigating, uint16_t remainingSec) {
+    if (channel < 1 || channel > MAX_CHANNELS) return;
+    uint8_t idx = channel - 1;
+
+    bool wasIrrigating = _status.channelIrrigating[idx];
+    _status.channelIrrigating[idx] = irrigating;
+
+    if (irrigating) {
+        // Approximate start time and duration from remaining seconds
+        if (!wasIrrigating) {
+            _status.channelStartTime[idx] = millis();
+            _status.channelDuration[idx] = (remainingSec + 59) / 60;  // Round up to minutes
+        }
+    } else {
+        _status.channelStartTime[idx] = 0;
+        _status.channelDuration[idx] = 0;
+    }
+
+    // Update global irrigating flag
+    bool anyActive = false;
+    for (uint8_t i = 0; i < MAX_CHANNELS; i++) {
+        if (_status.channelIrrigating[i]) {
+            anyActive = true;
+            break;
+        }
+    }
+    _status.irrigating = anyActive;
 }

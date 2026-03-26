@@ -8,12 +8,13 @@
 #include "IrrigationController.h"
 
 enum MenuScreen {
-    SCREEN_STATUS,      // Main status display
-    SCREEN_MENU_MAIN,   // Main menu
-    SCREEN_SCHEDULE,    // Schedule configuration
-    SCREEN_DURATION,    // Duration setting
-    SCREEN_MANUAL,      // Manual control
-    SCREEN_SETTINGS     // System settings
+    SCREEN_STATUS,        // Main status display
+    SCREEN_MENU_MAIN,     // Main menu
+    SCREEN_SCHEDULE,      // Schedule configuration
+    SCREEN_DURATION,      // Duration setting
+    SCREEN_MANUAL,        // Manual control
+    SCREEN_SETTINGS,      // System settings
+    SCREEN_PAIR_REQUEST   // Incoming pair request approval
 };
 
 enum Button {
@@ -42,6 +43,14 @@ public:
                      const char* line3 = nullptr, const char* line4 = nullptr);
     void clear();
 
+    // Pair request screen
+    void showPairRequest(const char* nodeId, const char* name);
+    void clearPairRequest();
+
+    // Pair response callback — called when user accepts/rejects via buttons
+    typedef void (*PairResponseCallback)(bool accepted);
+    void setPairResponseCallback(PairResponseCallback cb) { _pairResponseCallback = cb; }
+
     // Button handling
     Button checkButtons();
 
@@ -56,6 +65,7 @@ private:
     void drawDurationScreen();
     void drawManualScreen();
     void drawSettingsScreen();
+    void drawPairRequestScreen();
     String formatTime(time_t time);
     String formatDuration(unsigned long minutes);
     bool debounceButton(uint8_t pin);
@@ -70,6 +80,12 @@ private:
     unsigned long _lastUpdate;
     unsigned long _lastButtonPress[4];
     bool _lastButtonState[4];
+
+    // Pair request state
+    PairResponseCallback _pairResponseCallback;
+    bool _pairPending;
+    char _pairNodeId[12];
+    char _pairName[16];
 };
 
 #endif // DISPLAY_MANAGER_H

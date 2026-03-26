@@ -1,6 +1,7 @@
 #include "WiFiManager.h"
 #include "IrrigationController.h"
 #include "HomeAssistantIntegration.h"
+#include "NodeManager.h"
 
 WiFiManager::WiFiManager()
     : _timeSynced(false),
@@ -15,7 +16,8 @@ WiFiManager::WiFiManager()
       _dnsServer(nullptr),
       _timeUpdateCallback(nullptr),
       _controller(nullptr),
-      _homeAssistant(nullptr) {
+      _homeAssistant(nullptr),
+      _nodeManager(nullptr) {
 }
 
 WiFiManager::~WiFiManager() {
@@ -1260,6 +1262,14 @@ String WiFiManager::getStatusPage() {
             <div id="manualChannels"></div>
         </div>
 
+        <div id="nodesSection" class="schedule-section" style="display:none;">
+            <div class="section-header">
+                <h2>Nodes</h2>
+            </div>
+            <div id="pendingPairContainer"></div>
+            <div id="pairedSlavesList" class="channel-grid"></div>
+        </div>
+
         <div class="schedule-section">
             <div class="section-header">
                 <h2>Channel Schedules</h2>
@@ -1292,7 +1302,9 @@ String WiFiManager::getStatusPage() {
         document.addEventListener('DOMContentLoaded', function() {
             loadScheduleData();
             loadChannelStatus();
+            loadNodeStatus();
             setInterval(loadChannelStatus, 2000);
+            setInterval(loadNodeStatus, 2000);
         });
 
         function loadChannelStatus() {
@@ -1310,6 +1322,121 @@ String WiFiManager::getStatusPage() {
                     }
                 })
                 .catch(() => {});
+        }
+
+        function loadNodeStatus() {
+            fetch('/api/nodes/pending')
+                .then(response => response.json())
+                .then(data => {
+                    if (!data.success) return;
+                    const section = document.getElementById('nodesSection');
+                    const slaves = data.slaves || [];
+                    const pending = data.pending;
+                    if (!section) return;
+                    if (!pending && slaves.length === 0) {
+                        section.style.display = 'none';
+                        return;
+                    }
+                    section.style.display = 'block';
+
+                    // Pending pair request
+                    const pendingDiv = document.getElementById('pendingPairContainer');
+                    if (pending) {
+                        pendingDiv.innerHTML = `<div class="channel-card" style="border-color:#f6ad55;">
+                            <div class="channel-card-header">
+                                <h3 style="color:#f6ad55;">Pair Request: ${pending.name}</h3>
+                            </div>
+                            <div style="padding:5px 0;font-size:14px;">
+                                ID: ${pending.node_id} &middot; Channels: ${pending.num_channels} &middot; IP: ${pending.ip}
+                            </div>
+                            <div class="form-actions" style="margin-top:10px;">
+                                <button type="button" onclick="acceptPair()" style="background:#48bb78;color:#fff;border:none;padding:10px;border-radius:5px;cursor:pointer;flex:1;">Accept</button>
+                                <button type="button" onclick="rejectPair()" style="background:#e53e3e;color:#fff;border:none;padding:10px;border-radius:5px;cursor:pointer;flex:1;">Reject</button>
+                            </div>
+                        </div>`;
+                    } else {
+                        pendingDiv.innerHTML = '';
+                    }
+
+                    // Paired slaves list
+                    const listDiv = document.getElementById('pairedSlavesList');
+                    if (slaves.length === 0) {
+                        listDiv.innerHTML = '';
+                        return;
+                    }
+                    let html = '';
+                    slaves.forEach(s => {
+                        const statusClass = s.online ? 'running' : 'stopped';
+                        const statusText = s.online ? 'ONLINE' : 'OFFLINE';
+                        const displayName = s.name || s.node_id;
+                        html += `<div class="channel-card">
+                            <div class="channel-card-header">
+                                <span id="name_display_${s.node_id}" onclick="startRename('${s.node_id}','${displayName}')" style="cursor:pointer;" title="Click to rename"><h3 style="display:inline;margin:0;">${displayName}</h3> &#9998;</span>
+                                <input id="name_input_${s.node_id}" style="display:none;background:#111;color:#0f0;border:1px solid #0f0;border-radius:4px;padding:4px 8px;font-size:16px;font-family:inherit;width:60%;" onkeydown="if(event.key==='Enter')saveRename('${s.node_id}')" />
+                                <span class="channel-status ${statusClass}">${statusText}</span>
+                            </div>
+                            <div style="font-size:13px;color:#aaa;">
+                                ID: ${s.node_id} &middot; Ch: ${s.virtual_channel} &middot; RSSI: ${s.rssi}dBm
+                            </div>
+                            <button type="button" onclick="unpairSlave('${s.node_id}')" style="margin-top:8px;padding:6px 12px;background:#e53e3e;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:12px;">Unpair</button>
+                        </div>`;
+                    });
+                    listDiv.innerHTML = html;
+                })
+                .catch(() => {});
+        }
+
+        function acceptPair() {
+            fetch('/api/nodes/accept', {method:'POST'})
+                .then(r => r.json())
+                .then(() => loadNodeStatus())
+                .catch(() => {});
+        }
+
+        function rejectPair() {
+            fetch('/api/nodes/reject', {method:'POST'})
+                .then(r => r.json())
+                .then(() => loadNodeStatus())
+                .catch(() => {});
+        }
+
+        function startRename(nodeId, currentName) {
+            const display = document.getElementById('name_display_' + nodeId);
+            const input = document.getElementById('name_input_' + nodeId);
+            if (!display || !input) return;
+            display.style.display = 'none';
+            input.style.display = 'inline-block';
+            input.value = currentName;
+            input.focus();
+            input.select();
+            input.onblur = function() { saveRename(nodeId); };
+        }
+
+        function saveRename(nodeId) {
+            const input = document.getElementById('name_input_' + nodeId);
+            if (!input) return;
+            const newName = input.value.trim();
+            if (!newName) { loadNodeStatus(); return; }
+            fetch('/api/nodes/rename', {
+                method:'POST',
+                headers:{'Content-Type':'application/json'},
+                body: JSON.stringify({node_id: nodeId, name: newName})
+            })
+            .then(r => r.json())
+            .then(() => loadNodeStatus())
+            .catch(() => {});
+        }
+
+        function unpairSlave(nodeId) {
+            if (!confirm('Unpair this slave node?')) return;
+            fetch('/api/nodes/unpair', {
+                method:'POST',
+                headers:{'Content-Type':'application/json'},
+                body: JSON.stringify({node_id: nodeId})
+            })
+            .then(r => r.json())
+            .then(() => loadNodeStatus())
+            .catch(() => {});
         }
 
         function renderManualControls() {
@@ -1869,7 +1996,8 @@ void WiFiManager::startWebServer() {
         for (uint8_t i = 0; i < MAX_CHANNELS; i++) {
             JsonObject channel = channels.createNestedObject();
             channel["channel"] = i + 1;
-            channel["pin"] = CHANNEL_PINS[i];
+            channel["pin"] = (i < NUM_LOCAL_CHANNELS) ? CHANNEL_PINS[i] : 0;
+            if (i >= NUM_LOCAL_CHANNELS) channel["remote"] = true;
         }
 
         IrrigationSchedule schedules[MAX_SCHEDULES];
@@ -1974,9 +2102,10 @@ void WiFiManager::startWebServer() {
         for (uint8_t i = 0; i < MAX_CHANNELS; i++) {
             JsonObject ch = channels.createNestedObject();
             ch["channel"] = i + 1;
-            ch["pin"] = CHANNEL_PINS[i];
+            ch["pin"] = (i < NUM_LOCAL_CHANNELS) ? CHANNEL_PINS[i] : 0;
             ch["running"] = _controller->isChannelIrrigating(i + 1);
             ch["inverted"] = _controller->isChannelInverted(i + 1);
+            if (i >= NUM_LOCAL_CHANNELS) ch["remote"] = true;
         }
 
         String json;
@@ -2077,6 +2206,139 @@ void WiFiManager::startWebServer() {
         _controller->stopIrrigation(channel);
         DEBUG_PRINTF("WiFiManager: Manual stop channel %d\n", channel);
         _webServer->send(200, "application/json", "{\"success\":true,\"message\":\"Channel stopped\"}");
+    });
+
+    // ================================================================
+    // Node pairing API endpoints
+    // ================================================================
+
+    // GET /api/nodes/pending — pending pair request + list of paired slaves
+    _webServer->on("/api/nodes/pending", HTTP_GET, [this]() {
+        DynamicJsonDocument doc(1024);
+        doc["success"] = true;
+
+        if (_nodeManager) {
+            // Pending pair request
+            if (_nodeManager->hasPendingPair()) {
+                const PendingPairRequest& req = _nodeManager->getPendingPair();
+                JsonObject pending = doc.createNestedObject("pending");
+                pending["node_id"] = req.node_id;
+                pending["name"] = req.name;
+                pending["num_channels"] = req.num_channels;
+                pending["ip"] = req.ip.toString();
+            }
+
+            // Paired slaves
+            JsonArray slaves = doc.createNestedArray("slaves");
+            for (uint8_t i = 0; i < _nodeManager->getSlaveCount(); i++) {
+                const NodePeer* peer = _nodeManager->getSlave(i);
+                if (!peer) continue;
+                JsonObject s = slaves.createNestedObject();
+                s["node_id"] = peer->node_id;
+                s["name"] = peer->name;
+                s["virtual_channel"] = peer->base_virtual_ch;
+                s["num_channels"] = peer->num_channels;
+                s["online"] = peer->online;
+                s["rssi"] = peer->rssi;
+            }
+        }
+
+        String json;
+        serializeJson(doc, json);
+        _webServer->send(200, "application/json", json);
+    });
+
+    // POST /api/nodes/accept — accept pending pair request
+    _webServer->on("/api/nodes/accept", HTTP_POST, [this]() {
+        if (!_nodeManager) {
+            _webServer->send(500, "application/json", "{\"success\":false,\"message\":\"NodeManager not available\"}");
+            return;
+        }
+        if (!_nodeManager->hasPendingPair()) {
+            _webServer->send(400, "application/json", "{\"success\":false,\"message\":\"No pending pair request\"}");
+            return;
+        }
+        _nodeManager->acceptPendingPair();
+        _webServer->send(200, "application/json", "{\"success\":true,\"message\":\"Pair accepted\"}");
+    });
+
+    // POST /api/nodes/reject — reject pending pair request
+    _webServer->on("/api/nodes/reject", HTTP_POST, [this]() {
+        if (!_nodeManager) {
+            _webServer->send(500, "application/json", "{\"success\":false,\"message\":\"NodeManager not available\"}");
+            return;
+        }
+        if (!_nodeManager->hasPendingPair()) {
+            _webServer->send(400, "application/json", "{\"success\":false,\"message\":\"No pending pair request\"}");
+            return;
+        }
+        _nodeManager->rejectPendingPair(PAIR_REJECT_USER);
+        _webServer->send(200, "application/json", "{\"success\":true,\"message\":\"Pair rejected\"}");
+    });
+
+    // POST /api/nodes/rename — rename a paired slave
+    _webServer->on("/api/nodes/rename", HTTP_POST, [this]() {
+        if (!_nodeManager) {
+            _webServer->send(500, "application/json", "{\"success\":false,\"message\":\"NodeManager not available\"}");
+            return;
+        }
+
+        if (!_webServer->hasArg("plain")) {
+            _webServer->send(400, "application/json", "{\"success\":false,\"message\":\"Missing payload\"}");
+            return;
+        }
+
+        StaticJsonDocument<256> reqDoc;
+        DeserializationError error = deserializeJson(reqDoc, _webServer->arg("plain"));
+        if (error) {
+            _webServer->send(400, "application/json", "{\"success\":false,\"message\":\"Invalid JSON\"}");
+            return;
+        }
+
+        const char* nodeId = reqDoc["node_id"] | "";
+        const char* newName = reqDoc["name"] | "";
+        if (strlen(nodeId) == 0 || strlen(newName) == 0) {
+            _webServer->send(400, "application/json", "{\"success\":false,\"message\":\"node_id and name required\"}");
+            return;
+        }
+
+        if (_nodeManager->renameSlave(nodeId, newName)) {
+            _webServer->send(200, "application/json", "{\"success\":true,\"message\":\"Slave renamed\"}");
+        } else {
+            _webServer->send(404, "application/json", "{\"success\":false,\"message\":\"Slave not found\"}");
+        }
+    });
+
+    // POST /api/nodes/unpair — remove a paired slave
+    _webServer->on("/api/nodes/unpair", HTTP_POST, [this]() {
+        if (!_nodeManager) {
+            _webServer->send(500, "application/json", "{\"success\":false,\"message\":\"NodeManager not available\"}");
+            return;
+        }
+
+        if (!_webServer->hasArg("plain")) {
+            _webServer->send(400, "application/json", "{\"success\":false,\"message\":\"Missing payload\"}");
+            return;
+        }
+
+        StaticJsonDocument<128> reqDoc;
+        DeserializationError error = deserializeJson(reqDoc, _webServer->arg("plain"));
+        if (error) {
+            _webServer->send(400, "application/json", "{\"success\":false,\"message\":\"Invalid JSON\"}");
+            return;
+        }
+
+        const char* nodeId = reqDoc["node_id"] | "";
+        if (strlen(nodeId) == 0) {
+            _webServer->send(400, "application/json", "{\"success\":false,\"message\":\"node_id required\"}");
+            return;
+        }
+
+        if (_nodeManager->unpairSlave(nodeId)) {
+            _webServer->send(200, "application/json", "{\"success\":true,\"message\":\"Slave unpaired\"}");
+        } else {
+            _webServer->send(404, "application/json", "{\"success\":false,\"message\":\"Slave not found\"}");
+        }
     });
 
     // MQTT configuration save

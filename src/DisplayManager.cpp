@@ -9,12 +9,16 @@ DisplayManager::DisplayManager(IrrigationController* controller)
       _menuIndex(0),
       _editValue(0),
       _editMode(false),
-      _lastUpdate(0) {
+      _lastUpdate(0),
+      _pairResponseCallback(nullptr),
+      _pairPending(false) {
 
     for (int i = 0; i < 4; i++) {
         _lastButtonPress[i] = 0;
         _lastButtonState[i] = HIGH;
     }
+    memset(_pairNodeId, 0, sizeof(_pairNodeId));
+    memset(_pairName, 0, sizeof(_pairName));
 }
 
 DisplayManager::~DisplayManager() {
@@ -99,6 +103,9 @@ void DisplayManager::updateDisplay() {
             break;
         case SCREEN_SETTINGS:
             drawSettingsScreen();
+            break;
+        case SCREEN_PAIR_REQUEST:
+            drawPairRequestScreen();
             break;
     }
 }
@@ -365,6 +372,13 @@ void DisplayManager::handleButtonPress(Button btn) {
             break;
 
         case BTN_STOP_PRESSED:
+            if (_currentScreen == SCREEN_PAIR_REQUEST) {
+                // Reject pair request
+                _pairPending = false;
+                _currentScreen = SCREEN_STATUS;
+                if (_pairResponseCallback) _pairResponseCallback(false);
+                break;
+            }
             if (status.irrigating) {
                 _controller->stopIrrigation();
             }
@@ -388,6 +402,13 @@ void DisplayManager::handleButtonPress(Button btn) {
             break;
 
         case BTN_SELECT_PRESSED:
+            if (_currentScreen == SCREEN_PAIR_REQUEST) {
+                // Accept pair request
+                _pairPending = false;
+                _currentScreen = SCREEN_STATUS;
+                if (_pairResponseCallback) _pairResponseCallback(true);
+                break;
+            }
             if (_currentScreen == SCREEN_MENU_MAIN) {
                 // Select menu item
                 switch (_menuIndex) {
@@ -457,6 +478,46 @@ void DisplayManager::clear() {
     if (!_lcd) return;
 
     _lcd->clear();
+}
+
+void DisplayManager::showPairRequest(const char* nodeId, const char* name) {
+    strncpy(_pairNodeId, nodeId, sizeof(_pairNodeId) - 1);
+    _pairNodeId[sizeof(_pairNodeId) - 1] = '\0';
+    strncpy(_pairName, name, sizeof(_pairName) - 1);
+    _pairName[sizeof(_pairName) - 1] = '\0';
+    _pairPending = true;
+    _currentScreen = SCREEN_PAIR_REQUEST;
+    updateDisplay();
+}
+
+void DisplayManager::clearPairRequest() {
+    if (_currentScreen == SCREEN_PAIR_REQUEST) {
+        _pairPending = false;
+        _currentScreen = SCREEN_STATUS;
+        updateDisplay();
+    }
+}
+
+void DisplayManager::drawPairRequestScreen() {
+    if (!_lcd) return;
+
+    char line1[17];
+    char line2[17];
+    memset(line1, ' ', 16);
+    memset(line2, ' ', 16);
+    line1[16] = '\0';
+    line2[16] = '\0';
+
+    // Line 1: "Pair:<name>" truncated to 16 chars
+    snprintf(line1, 17, "Pair:%-11s", _pairName);
+
+    // Line 2: "SEL=Yes STOP=No"
+    snprintf(line2, 17, "SEL=Yes STOP=No ");
+
+    _lcd->setCursor(0, 0);
+    _lcd->print(line1);
+    _lcd->setCursor(0, 1);
+    _lcd->print(line2);
 }
 
 String DisplayManager::formatTime(time_t time) {
