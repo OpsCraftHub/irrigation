@@ -746,6 +746,8 @@ void WiFiManager::checkForUpdates() {
 
 bool WiFiManager::checkGitHubVersion(String& latestVersion) {
     HTTPClient http;
+    WiFiClientSecure client;
+    client.setInsecure();  // Skip cert validation for GitHub
 
     // Build GitHub URL for version file
     String url = "https://raw.githubusercontent.com/";
@@ -757,7 +759,7 @@ bool WiFiManager::checkGitHubVersion(String& latestVersion) {
 
     DEBUG_PRINTF("WiFiManager: Checking version at: %s\n", url.c_str());
 
-    http.begin(url);
+    http.begin(client, url);
     int httpCode = http.GET();
 
     if (httpCode == HTTP_CODE_OK) {
@@ -800,7 +802,9 @@ void WiFiManager::performOTA() {
 
 bool WiFiManager::downloadFirmware(const String& url) {
     HTTPClient http;
-    http.begin(url);
+    WiFiClientSecure client;
+    client.setInsecure();  // Skip cert validation for GitHub
+    http.begin(client, url);
 
     int httpCode = http.GET();
     if (httpCode != HTTP_CODE_OK) {
@@ -1449,9 +1453,10 @@ String WiFiManager::getStatusPage() {
                 const inverted = channelInverted[ch.channel] || false;
                 const statusClass = running ? 'running' : 'stopped';
                 const statusText = running ? 'RUNNING' : 'OFF';
+                const pinLabel = ch.remote ? `<span class="pin">${ch.slave || 'Remote'}</span>` : `<span class="pin">GPIO ${ch.pin}</span>`;
                 html += `<div class="channel-row">
                     <div class="channel-label">
-                        Channel ${ch.channel} <span class="pin">GPIO ${ch.pin}</span>
+                        Channel ${ch.channel} ${pinLabel}
                         <span class="channel-status ${statusClass}">${statusText}</span>
                         <button class="invert-btn${inverted ? ' active' : ''}" onclick="toggleInvert(${ch.channel})">INV</button>
                     </div>
@@ -1526,7 +1531,7 @@ String WiFiManager::getStatusPage() {
             channelMeta.forEach(channel => {
                 const option = document.createElement('option');
                 option.value = channel.channel;
-                option.textContent = `Channel ${channel.channel} • GPIO ${channel.pin}`;
+                option.textContent = channel.remote ? `Channel ${channel.channel} • ${channel.slave || 'Remote'}` : `Channel ${channel.channel} • GPIO ${channel.pin}`;
                 select.appendChild(option);
             });
         }
@@ -1993,11 +1998,25 @@ void WiFiManager::startWebServer() {
         doc["success"] = true;
 
         JsonArray channels = doc.createNestedArray("channels");
-        for (uint8_t i = 0; i < MAX_CHANNELS; i++) {
+        // Local channels always shown
+        for (uint8_t i = 0; i < NUM_LOCAL_CHANNELS; i++) {
             JsonObject channel = channels.createNestedObject();
             channel["channel"] = i + 1;
-            channel["pin"] = (i < NUM_LOCAL_CHANNELS) ? CHANNEL_PINS[i] : 0;
-            if (i >= NUM_LOCAL_CHANNELS) channel["remote"] = true;
+            channel["pin"] = CHANNEL_PINS[i];
+        }
+        // Virtual channels only shown if a slave is paired on them
+        if (_nodeManager) {
+            for (uint8_t i = 0; i < _nodeManager->getSlaveCount(); i++) {
+                const NodePeer* slave = _nodeManager->getSlave(i);
+                if (!slave) continue;
+                for (uint8_t ch = 0; ch < slave->num_channels; ch++) {
+                    JsonObject channel = channels.createNestedObject();
+                    channel["channel"] = slave->base_virtual_ch + ch;
+                    channel["pin"] = 0;
+                    channel["remote"] = true;
+                    channel["slave"] = slave->name[0] ? slave->name : slave->node_id;
+                }
+            }
         }
 
         IrrigationSchedule schedules[MAX_SCHEDULES];
@@ -2099,13 +2118,30 @@ void WiFiManager::startWebServer() {
         doc["success"] = true;
 
         JsonArray channels = doc.createNestedArray("channels");
-        for (uint8_t i = 0; i < MAX_CHANNELS; i++) {
+        // Local channels
+        for (uint8_t i = 0; i < NUM_LOCAL_CHANNELS; i++) {
             JsonObject ch = channels.createNestedObject();
             ch["channel"] = i + 1;
-            ch["pin"] = (i < NUM_LOCAL_CHANNELS) ? CHANNEL_PINS[i] : 0;
+            ch["pin"] = CHANNEL_PINS[i];
             ch["running"] = _controller->isChannelIrrigating(i + 1);
             ch["inverted"] = _controller->isChannelInverted(i + 1);
-            if (i >= NUM_LOCAL_CHANNELS) ch["remote"] = true;
+        }
+        // Virtual channels for paired slaves only
+        if (_nodeManager) {
+            for (uint8_t s = 0; s < _nodeManager->getSlaveCount(); s++) {
+                const NodePeer* slave = _nodeManager->getSlave(s);
+                if (!slave) continue;
+                for (uint8_t c = 0; c < slave->num_channels; c++) {
+                    uint8_t vch = slave->base_virtual_ch + c;
+                    JsonObject ch = channels.createNestedObject();
+                    ch["channel"] = vch;
+                    ch["pin"] = 0;
+                    ch["running"] = _controller->isChannelIrrigating(vch);
+                    ch["inverted"] = _controller->isChannelInverted(vch);
+                    ch["remote"] = true;
+                    ch["slave"] = slave->name[0] ? slave->name : slave->node_id;
+                }
+            }
         }
 
         String json;
@@ -2428,6 +2464,80 @@ void WiFiManager::startWebServer() {
         } else {
             _webServer->send(200, "application/json", "{\"success\":true,\"message\":\"No MQTT credentials to remove\"}");
         }
+    });
+
+    // Feature flags config API
+    _webServer->on("/api/config", HTTP_GET, [this]() {
+        StaticJsonDocument<512> doc;
+        doc["success"] = true;
+        doc["node_id"] = nodeId;
+        doc["role"] = nodeRole;
+
+        JsonObject feat = doc.createNestedObject("features");
+        feat["multi_node"] = features.multi_node;
+        feat["mqtt"] = features.mqtt;
+        feat["web_ui"] = features.web_ui;
+        feat["sensors"] = features.sensors;
+        feat["battery"] = features.battery;
+        feat["ota"] = features.ota;
+        feat["debug"] = features.debug;
+
+        String json;
+        serializeJson(doc, json);
+        _webServer->send(200, "application/json", json);
+    });
+
+    _webServer->on("/api/config", HTTP_POST, [this]() {
+        if (!_webServer->hasArg("plain")) {
+            _webServer->send(400, "application/json", "{\"success\":false,\"message\":\"No body\"}");
+            return;
+        }
+
+        StaticJsonDocument<512> doc;
+        DeserializationError error = deserializeJson(doc, _webServer->arg("plain"));
+        if (error) {
+            _webServer->send(400, "application/json", "{\"success\":false,\"message\":\"Invalid JSON\"}");
+            return;
+        }
+
+        // Update feature flags (only update fields that are present)
+        JsonObject feat = doc["features"];
+        if (!feat.isNull()) {
+            if (feat.containsKey("multi_node")) features.multi_node = feat["multi_node"];
+            if (feat.containsKey("mqtt")) features.mqtt = feat["mqtt"];
+            if (feat.containsKey("web_ui")) features.web_ui = feat["web_ui"];
+            if (feat.containsKey("sensors")) features.sensors = feat["sensors"];
+            if (feat.containsKey("battery")) features.battery = feat["battery"];
+            if (feat.containsKey("ota")) features.ota = feat["ota"];
+            if (feat.containsKey("debug")) features.debug = feat["debug"];
+        }
+
+        // Update node identity if provided
+        if (doc.containsKey("node_id")) nodeId = doc["node_id"].as<String>();
+        if (doc.containsKey("role")) nodeRole = doc["role"].as<String>();
+
+        // Save to SPIFFS
+        StaticJsonDocument<1024> saveDoc;
+        saveDoc["node_id"] = nodeId;
+        saveDoc["role"] = nodeRole;
+        JsonObject saveFeat = saveDoc.createNestedObject("features");
+        saveFeat["multi_node"] = features.multi_node;
+        saveFeat["mqtt"] = features.mqtt;
+        saveFeat["web_ui"] = features.web_ui;
+        saveFeat["sensors"] = features.sensors;
+        saveFeat["battery"] = features.battery;
+        saveFeat["ota"] = features.ota;
+        saveFeat["debug"] = features.debug;
+
+        File file = SPIFFS.open(CONFIG_FILE, "w");
+        if (file) {
+            serializeJson(saveDoc, file);
+            file.close();
+            DEBUG_PRINTLN("WiFiManager: Config saved to SPIFFS");
+        }
+
+        _webServer->send(200, "application/json",
+            "{\"success\":true,\"message\":\"Config saved. Restart to apply changes.\"}");
     });
 
     // System restart

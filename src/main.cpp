@@ -31,12 +31,9 @@ WiFiManager* wifiManager = nullptr;
 HomeAssistantIntegration* homeAssistant = nullptr;
 NodeManager* nodeManager = nullptr;
 
-// Feature flags — Board B defaults to multi_node on (it's a slave)
-#ifdef BOARD_B
+// Feature flags — multi_node on by default for both boards
+//                  {multi_node, mqtt, web_ui, sensors, battery, ota, debug}
 Features features = {true, false, true, false, false, true, false};
-#else
-Features features = {false, false, true, false, false, true, false};
-#endif
 
 // Node identity
 String nodeId = DEFAULT_NODE_ID;

@@ -212,6 +212,11 @@ struct Features {
     bool debug;
 };
 
+// Global feature flags (defined in main.cpp)
+extern Features features;
+extern String nodeId;
+extern String nodeRole;
+
 // Irrigation schedule structure
 struct IrrigationSchedule {
     bool enabled;
