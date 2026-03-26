@@ -18,13 +18,16 @@ This is an **ESP32-based irrigation controller** with Home Assistant integration
 ### PlatformIO Commands
 
 ```bash
-# Build firmware
+# Build Board A firmware (ESP32 master)
 pio run --environment esp32dev
+
+# Build Board B firmware (ESP32-C3 slave) — when env exists
+pio run --environment board_b_c3
 
 # Clean build (required after version changes)
 pio run --target clean --environment esp32dev
 
-# Upload firmware to ESP32
+# Upload firmware to ESP32 (Board A)
 pio run --target upload --upload-port /dev/cu.usbserial-0001
 
 # Upload SPIFFS filesystem (config.json)
@@ -329,6 +332,130 @@ Before releasing changes:
 6. Test OTA update process
 7. Check serial output for errors
 8. Monitor free heap for leaks
+
+## Hardware Design (KiCad)
+
+### Two Boards
+
+| Board | MCU | Purpose | Status |
+|-------|-----|---------|--------|
+| **Board A** | ESP32-WROOM-32U | Multi-channel master (2/4/6ch), LCD, buttons | Designed, populating |
+| **Board B** | ESP32-C3-MINI-1 | Single-channel slave, optional battery | New design needed |
+
+### Board A — Project Location
+
+KiCad project: `hardware/irrigation_6ch_oled/irrigation_6ch_oled.kicad_pro`
+
+### Board A — PCB Specifications
+
+- **Board**: 110mm x 125mm, 2-layer, FR4, 1.6mm, 1oz Cu, HASL
+- **Manufacturer**: JLCPCB or PCBWay (professional 2-layer fab)
+- **Min trace/space**: 0.25mm / 0.25mm
+- **Min drill**: 0.2mm (ESP32 thermal vias)
+
+### Board A — Key Design Decisions
+
+1. **ESP32-WROOM-32U (not -32D)**: External antenna variant for better WiFi in enclosures
+2. **IRLZ44N logic-level MOSFETs**: Direct 3.3V gate drive from ESP32, no level shifter needed
+3. **Through-hole components**: Easier hand assembly for small production runs
+4. **24V solenoid drive**: MOSFET low-side switching with 1N4007 flyback protection per channel
+5. **On-board 3.3V LDO (LD1117V33)**: Fed from 5V buck converter
+6. **On-board LM2596T-5 buck converter**: TO-220-5 through-hole, fixed 5V output, with 1N5822 Schottky catch diode and 33uH radial inductor. Replaces the previous external buck module header (J4).
+7. **6-pin UART header (J10)**: Includes TX, RX, +3V3, GND for programming. **TODO: Add GPIO0 and EN pins for one-click programming**
+
+### Board B — Key Design Decisions
+
+1. **ESP32-C3-MINI-1**: RISC-V, lower cost, lower power (5uA deep sleep), no GPIO0/2 boot-strap issues
+2. **SMD module + through-hole passives**: C3-MINI-1 is castellated SMD; all other parts stay through-hole
+3. **Single MOSFET channel**: Same IRLZ44N pattern as Board A
+4. **Jumper J1**: Selects mains power or battery power mode
+5. **Status LED on GPIO3**: Morse-style patterns for headless debugging
+
+### MOSFET Channel Pattern (x6)
+
+Each valve channel follows the same pattern:
+```
+ESP32 GPIO --> 100R gate resistor --> IRLZ44N gate
+                                      IRLZ44N drain --> solenoid --> +24V
+                                      IRLZ44N source --> GND
+                  10k pull-down --> IRLZ44N gate to GND
+                  1N4007 flyback diode across drain-source
+```
+
+### Autorouting Workflow
+
+Uses Freerouting (external Java autorouter):
+```bash
+# 1. Export DSN from KiCad Python API
+/Applications/KiCad/KiCad.app/Contents/Frameworks/Python.framework/Versions/Current/bin/python3 -c "
+import pcbnew
+board = pcbnew.LoadBoard('hardware/irrigation_6ch_oled/irrigation_6ch_oled.kicad_pcb')
+pcbnew.ExportSpecctraDSN(board, 'hardware/irrigation_6ch_oled/irrigation_6ch_oled.dsn')
+"
+
+# 2. Run Freerouting
+java -jar ~/freerouting-2.0.1.jar -de hardware/irrigation_6ch_oled/irrigation_6ch_oled.dsn -do hardware/irrigation_6ch_oled/irrigation_6ch_oled.ses -mp 30
+
+# 3. Import SES back
+/Applications/KiCad/KiCad.app/Contents/Frameworks/Python.framework/Versions/Current/bin/python3 -c "
+import pcbnew
+board = pcbnew.LoadBoard('hardware/irrigation_6ch_oled/irrigation_6ch_oled.kicad_pcb')
+pcbnew.ImportSpecctraSES(board, 'hardware/irrigation_6ch_oled/irrigation_6ch_oled.ses')
+board.Save(board.GetFileName())
+"
+
+# 4. Run DRC
+/Applications/KiCad/KiCad.app/Contents/MacOS/kicad-cli pcb drc --output /tmp/drc_report.json --format json "hardware/irrigation_6ch_oled/irrigation_6ch_oled.kicad_pcb"
+```
+
+### KiCad Python API Notes
+
+- System Python does NOT have pcbnew. Must use KiCad's bundled Python:
+  `/Applications/KiCad/KiCad.app/Contents/Frameworks/Python.framework/Versions/Current/bin/python3`
+- `kicad-cli` does NOT support DSN export - must use pcbnew Python API
+- Positions in pcbnew use nanometers internally: `pcbnew.FromMM(x)` and `pcbnew.ToMM(x)`
+- Footprint library path: `/Applications/KiCad/KiCad.app/Contents/SharedSupport/footprints/`
+
+## Product Line Strategy
+
+### Context
+
+This is the first of ~10 home electronics products built on ESP32 + Home Assistant. Optimizing for **fast iteration and R&D time to market**.
+
+### Reusable Design Patterns Across Products
+
+1. **ESP32 + Home Assistant core**: Master boards use ESP32-WROOM-32U, slave/satellite boards use ESP32-C3-MINI-1. WiFi, MQTT auto-discovery, OTA updates
+2. **Firmware architecture**: 4-component pattern (Controller, DisplayManager, WiFiManager, HomeAssistantIntegration) - copy and adapt per product
+3. **Power supply**: 24V/12V input → buck → 5V → LD1117V33 → 3.3V (standardize across products)
+4. **MOSFET switching pattern**: IRLZ44N + 100R gate + 10k pulldown + flyback diode - reuse for any solenoid/relay/motor load
+5. **PCB manufacturing**: JLCPCB for production boards, through-hole for hand assembly at small scale
+6. **OTA updates**: GitHub Actions auto-build + version bump + device auto-update from GitHub releases
+7. **Enclosure**: M3 mounting holes at corners, standard spacing
+
+### Fast Iteration Checklist (New Product)
+
+1. Copy firmware template (4-component architecture)
+2. Copy KiCad schematic template (ESP32 + power + MOSFET channels)
+3. Modify channel count and peripherals as needed
+4. Adapt Home Assistant discovery messages
+5. Route PCB with Freerouting
+6. Order from JLCPCB ($2-5 for 5 boards, 5-7 day turnaround)
+7. Hand-assemble and test
+8. Set up GitHub Actions for OTA pipeline
+
+### BOM Cost Targets
+
+- **Per unit (1-off)**: ~$8-10 USD (~R150-180 ZAR)
+- **Per unit (50-pack bulk)**: ~$5.50-7 USD (~R100-130 ZAR)
+- **PCB only**: ~$1/board at 5-pack, ~$0.40/board at 50-pack (JLCPCB)
+- **Target retail margin**: 3-4x BOM cost
+
+### Suppliers
+
+- **PCB fabrication**: JLCPCB (cheapest), PCBWay (better service)
+- **Components**: AliExpress (bulk, 2-4 week shipping to Cape Town)
+- **Local SA backup**: PiShop.co.za, Leobot.net, Micro Robotics (robotics.org.za)
+- **Enclosures**: AliExpress project boxes or custom 3D-printed
 
 ## Documentation
 

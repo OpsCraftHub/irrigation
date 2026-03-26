@@ -63,23 +63,33 @@ jobs:
           echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
           echo "Bumped version to: $NEW_VERSION"
 
-      - name: Clean build directory
-        run: pio run --target clean --environment esp32dev
+      - name: Clean and build Board A (ESP32)
+        run: |
+          pio run --target clean --environment board_a
+          pio run --environment board_a
 
-      - name: Build firmware
-        run: pio run --environment esp32dev
+      - name: Clean and build Board B (ESP32-C3)
+        run: |
+          pio run --target clean --environment board_b_c3
+          pio run --environment board_b_c3
 
       - name: Prepare firmware artifacts
         run: |
-          mkdir -p firmware
-          cp .pio/build/esp32dev/firmware.bin firmware/firmware.bin
-          echo "${{ steps.version.outputs.version }}" > firmware/version.txt
+          mkdir -p firmware/board_a firmware/board_b_c3
+          cp .pio/build/board_a/firmware.bin firmware/board_a/firmware.bin
+          echo "${{ steps.version.outputs.version }}" > firmware/board_a/version.txt
+          cp .pio/build/board_b_c3/firmware.bin firmware/board_b_c3/firmware.bin
+          echo "${{ steps.version.outputs.version }}" > firmware/board_b_c3/version.txt
+
+          # Legacy paths for devices running pre-update firmware
+          cp firmware/board_a/firmware.bin firmware/firmware.bin
+          cp firmware/board_a/version.txt firmware/version.txt
 
       - name: Check for changes and commit everything together
         id: check_changes
         run: |
-          # Stage all changes: Config.h, firmware.bin, and version.txt
-          git add include/Config.h firmware/firmware.bin firmware/version.txt
+          # Stage all changes
+          git add include/Config.h firmware/board_a/ firmware/board_b_c3/ firmware/firmware.bin firmware/version.txt
 
           if git diff --staged --quiet; then
             echo "changed=false" >> $GITHUB_OUTPUT
@@ -106,8 +116,14 @@ jobs:
             This firmware can be installed via OTA update on your ESP32 device.
 
             ## Files
-            - `firmware.bin` - Main firmware binary
+            - `firmware/board_a/firmware.bin` - Board A (ESP32) firmware
+            - `firmware/board_b_c3/firmware.bin` - Board B (ESP32-C3) firmware
+            - `firmware/firmware.bin` - Legacy path (Board A copy)
           files: |
+            firmware/board_a/firmware.bin
+            firmware/board_a/version.txt
+            firmware/board_b_c3/firmware.bin
+            firmware/board_b_c3/version.txt
             firmware/firmware.bin
             firmware/version.txt
           draft: false

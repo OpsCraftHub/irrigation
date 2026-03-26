@@ -58,10 +58,10 @@ bool DisplayManager::begin() {
 }
 
 void DisplayManager::initButtons() {
-    pinMode(BTN_START, INPUT_PULLUP);
-    pinMode(BTN_STOP, INPUT_PULLUP);
-    pinMode(BTN_NEXT, INPUT_PULLUP);
-    pinMode(BTN_SELECT, INPUT_PULLUP);
+    if (BTN_START >= 0) pinMode(BTN_START, INPUT_PULLUP);
+    if (BTN_STOP >= 0) pinMode(BTN_STOP, INPUT_PULLUP);
+    if (BTN_NEXT >= 0) pinMode(BTN_NEXT, INPUT_PULLUP);
+    if (BTN_SELECT >= 0) pinMode(BTN_SELECT, INPUT_PULLUP);
 }
 
 void DisplayManager::update() {
@@ -321,6 +321,7 @@ Button DisplayManager::checkButtons() {
 }
 
 bool DisplayManager::debounceButton(uint8_t pin) {
+    if (pin == (uint8_t)-1) return false;  // pin -1 means no button
     int buttonIndex = -1;
 
     if (pin == BTN_START) buttonIndex = 0;

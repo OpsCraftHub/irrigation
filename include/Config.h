@@ -11,33 +11,58 @@
 #endif
 
 // ============================================================================
-// PIN DEFINITIONS
+// PIN DEFINITIONS (Board-Aware)
 // ============================================================================
 
-// Multi-Channel Relay/MOSFET Outputs for Valve Control
-#define MAX_CHANNELS 2
-#define CHANNEL_1_PIN 25  // GPIO25 - Channel 1 (IN1)
-#define CHANNEL_2_PIN 4   // GPIO4  - Channel 2 (IN2)
+#ifdef BOARD_B
+    // ESP32-C3 (Board B slave) — single channel, no LCD, no buttons
+    #define MAX_CHANNELS 1
+    #define CHANNEL_1_PIN 5
+
+    // No buttons on Board B
+    #define BTN_START -1
+    #define BTN_STOP -1
+    #define BTN_NEXT -1
+    #define BTN_SELECT -1
+
+    // No LCD on Board B
+    #define LCD_ADDRESS 0x27
+    #define LCD_COLS 0
+    #define LCD_ROWS 0
+    #define LCD_SDA -1
+    #define LCD_SCL -1
+
+    // Status LED on C3 (morse-style patterns for headless debugging)
+    #define LED_STATUS 3
+    #define LED_BLUE -1
+    #define STATUS_LED_PIN 3
+#else
+    // ESP32 (Board A master) — multi-channel, LCD, buttons
+    #define MAX_CHANNELS 2
+    #define CHANNEL_1_PIN 25  // GPIO25 - Channel 1 (IN1)
+    #define CHANNEL_2_PIN 4   // GPIO4  - Channel 2 (IN2)
+
+    // Button Inputs (active LOW with internal pullup)
+    #define BTN_START 32   // Start irrigation manually
+    #define BTN_STOP 33    // Stop irrigation
+    #define BTN_NEXT 26    // Navigate menu (next item)
+    #define BTN_SELECT 27  // Select/confirm in menu
+
+    // LCD I2C Configuration
+    #define LCD_ADDRESS 0x27  // Common I2C address for LCD (try 0x3F if not working)
+    #define LCD_COLS 16       // 16x2 LCD
+    #define LCD_ROWS 2
+    #define LCD_SDA 21        // I2C SDA pin
+    #define LCD_SCL 22        // I2C SCL pin
+
+    // Status LEDs
+    #define LED_STATUS 2      // Built-in LED on most ESP32 boards (Red - Power)
+    #define LED_BLUE 15       // Blue LED - Irrigation indicator
+    #define STATUS_LED_PIN -1 // No dedicated status LED on Board A (has LCD instead)
+#endif
 
 // Legacy definition for backward compatibility
 #define VALVE_PIN CHANNEL_1_PIN
-
-// Button Inputs (active LOW with internal pullup)
-#define BTN_START 32   // Start irrigation manually
-#define BTN_STOP 33    // Stop irrigation
-#define BTN_NEXT 26    // Navigate menu (next item)
-#define BTN_SELECT 27  // Select/confirm in menu
-
-// LCD I2C Configuration
-#define LCD_ADDRESS 0x27  // Common I2C address for LCD (try 0x3F if not working)
-#define LCD_COLS 16       // 16x2 LCD
-#define LCD_ROWS 2
-#define LCD_SDA 21        // I2C SDA pin
-#define LCD_SCL 22        // I2C SCL pin
-
-// Status LEDs
-#define LED_STATUS 2      // Built-in LED on most ESP32 boards (Red - Power)
-#define LED_BLUE 15       // Blue LED - Irrigation indicator
 
 // ============================================================================
 // IRRIGATION SETTINGS
@@ -106,8 +131,14 @@
 // GitHub repository for firmware updates
 #define GITHUB_REPO_OWNER "OpsCraftHub"
 #define GITHUB_REPO_NAME "irrigation"
-#define GITHUB_FIRMWARE_PATH "firmware/firmware.bin"
-#define GITHUB_VERSION_PATH "firmware/version.txt"
+
+#ifdef BOARD_B
+    #define GITHUB_FIRMWARE_PATH "firmware/board_b_c3/firmware.bin"
+    #define GITHUB_VERSION_PATH "firmware/board_b_c3/version.txt"
+#else
+    #define GITHUB_FIRMWARE_PATH "firmware/board_a/firmware.bin"
+    #define GITHUB_VERSION_PATH "firmware/board_a/version.txt"
+#endif
 
 // ============================================================================
 // STORAGE SETTINGS
@@ -146,8 +177,26 @@
 #endif
 
 // ============================================================================
+// NODE IDENTITY
+// ============================================================================
+
+#define DEFAULT_NODE_ID "node"
+#define DEFAULT_ROLE "master"  // overridden by config.json
+
+// ============================================================================
 // STRUCTURES
 // ============================================================================
+
+// Feature flags — loaded from config.json at runtime
+struct Features {
+    bool multi_node;
+    bool mqtt;
+    bool web_ui;
+    bool sensors;
+    bool battery;
+    bool ota;
+    bool debug;
+};
 
 // Irrigation schedule structure
 struct IrrigationSchedule {
@@ -177,9 +226,15 @@ struct SystemStatus {
 };
 
 // Channel pin mapping array
+#ifdef BOARD_B
+const uint8_t CHANNEL_PINS[MAX_CHANNELS] = {
+    CHANNEL_1_PIN
+};
+#else
 const uint8_t CHANNEL_PINS[MAX_CHANNELS] = {
     CHANNEL_1_PIN,
     CHANNEL_2_PIN
 };
+#endif
 
 #endif // CONFIG_H

@@ -1,17 +1,17 @@
 /*
- * ESP32 Single-Channel Irrigation Controller
+ * ESP32 Multi-Node Irrigation Controller
  *
  * Features:
- * - Single valve/pump control via relay or MOSFET
+ * - Multi-channel valve control via relay or MOSFET
  * - Schedule-based irrigation with offline operation
- * - LCD display with button controls
+ * - LCD display with button controls (Board A)
+ * - Status LED for headless operation (Board B)
  * - WiFi connectivity with auto-reconnect
  * - NTP time synchronization with RTC fallback
  * - Automatic OTA updates from GitHub
  * - Home Assistant MQTT integration with auto-discovery
  * - Non-volatile storage for schedules (SPIFFS)
- *
- * Author: Your Name
+ * - Runtime feature flags from config.json
  */
 
 
@@ -27,6 +27,13 @@ IrrigationController* irrigationController = nullptr;
 DisplayManager* displayManager = nullptr;
 WiFiManager* wifiManager = nullptr;
 HomeAssistantIntegration* homeAssistant = nullptr;
+
+// Feature flags — defaults: web_ui and ota on, everything else off
+Features features = {false, false, true, false, false, true, false};
+
+// Node identity
+String nodeId = DEFAULT_NODE_ID;
+String nodeRole = DEFAULT_ROLE;
 
 // System status
 unsigned long lastStatusUpdate = 0;
@@ -44,78 +51,118 @@ void setup() {
     DEBUG_PRINTLN("\n\n==================================");
     DEBUG_PRINTLN("ESP32 Irrigation Controller");
     DEBUG_PRINTLN("Version: " VERSION);
+#ifdef BOARD_B
+    DEBUG_PRINTLN("Board: B (ESP32-C3)");
+#else
+    DEBUG_PRINTLN("Board: A (ESP32)");
+#endif
     DEBUG_PRINTLN("==================================\n");
 #endif
 
-    // Initialize LEDs
-    pinMode(LED_STATUS, OUTPUT);
-    pinMode(LED_BLUE, OUTPUT);
-    digitalWrite(LED_STATUS, HIGH); // Turn on red LED (power indicator)
-    digitalWrite(LED_BLUE, LOW);    // Blue LED off initially
+    // Initialize LEDs (guard against pin -1)
+    if (LED_STATUS >= 0) {
+        pinMode(LED_STATUS, OUTPUT);
+        digitalWrite(LED_STATUS, HIGH); // Turn on LED (power indicator)
+    }
+    if (LED_BLUE >= 0) {
+        pinMode(LED_BLUE, OUTPUT);
+        digitalWrite(LED_BLUE, LOW);    // Blue LED off initially
+    }
 
-    // Load configuration from SPIFFS
+    // Load configuration from SPIFFS (including feature flags)
     loadConfiguration();
 
-    // Initialize irrigation controller
+    // Initialize irrigation controller — always init (core function)
     DEBUG_PRINTLN("Initializing Irrigation Controller...");
     irrigationController = new IrrigationController();
     if (!irrigationController->begin()) {
         DEBUG_PRINTLN("ERROR: Failed to initialize IrrigationController!");
     }
 
-    // Initialize display manager
+    // Initialize display manager — skip if no LCD pins defined
+#if LCD_ROWS > 0
     DEBUG_PRINTLN("Initializing Display Manager...");
     displayManager = new DisplayManager(irrigationController);
     if (!displayManager->begin()) {
-        DEBUG_PRINTLN("ERROR: Failed to initialize DisplayManager!");
+        DEBUG_PRINTLN("WARNING: Display init failed");
     } else {
         displayManager->showMessage("Irrigation System", "Starting up...", "", "");
         delay(1000);
     }
+#else
+    DEBUG_PRINTLN("No LCD configured, skipping DisplayManager");
+#endif
 
-    // Initialize Home Assistant integration (before WiFiManager so it can load MQTT creds)
-    DEBUG_PRINTLN("Initializing Home Assistant Integration...");
-    homeAssistant = new HomeAssistantIntegration(irrigationController);
-    homeAssistant->begin(); // Will load credentials from SPIFFS or fail gracefully
+    // Initialize Home Assistant integration — only if mqtt feature enabled
+    if (features.mqtt) {
+        DEBUG_PRINTLN("Initializing Home Assistant Integration...");
+        homeAssistant = new HomeAssistantIntegration(irrigationController);
+        homeAssistant->begin();
+    } else {
+        DEBUG_PRINTLN("MQTT feature disabled, skipping HomeAssistant");
+    }
 
-    // Initialize WiFi manager
+    // Initialize WiFi manager — always init (needed for NTP, OTA, web)
     DEBUG_PRINTLN("Initializing WiFi Manager...");
     wifiManager = new WiFiManager();
     wifiManager->setController(irrigationController);
-    wifiManager->setHomeAssistant(homeAssistant); // For MQTT config in web UI
+    if (features.mqtt && homeAssistant) {
+        wifiManager->setHomeAssistant(homeAssistant);
+    }
 
     // Try to connect with saved credentials or start config portal
     if (!wifiManager->begin()) {
         DEBUG_PRINTLN("WiFiManager: Started in configuration mode");
-        displayManager->showMessage("WiFi Setup Mode", "Connect to:", WIFI_AP_NAME, "to configure WiFi");
+#if LCD_ROWS > 0
+        if (displayManager) {
+            displayManager->showMessage("WiFi Setup Mode", "Connect to:", WIFI_AP_NAME, "to configure WiFi");
+        }
+#endif
     } else {
         DEBUG_PRINTLN("WiFiManager: Connected successfully");
-        // Flash IP address on screen for 3 seconds
-        String ipLine = WiFi.localIP().toString();
-        displayManager->showMessage("WiFi Connected!", ipLine.c_str(), "", "");
-        delay(3000);
+#if LCD_ROWS > 0
+        if (displayManager) {
+            // Flash IP address on screen for 3 seconds
+            String ipLine = WiFi.localIP().toString();
+            displayManager->showMessage("WiFi Connected!", ipLine.c_str(), "", "");
+            delay(3000);
+        }
+#endif
     }
 
     // Set time update callback
     wifiManager->setTimeUpdateCallback(timeUpdateCallback);
 
     // Show initial status
-    displayManager->showStatus();
+#if LCD_ROWS > 0
+    if (displayManager) {
+        displayManager->showStatus();
+    }
+#endif
 
     // Turn off LED - boot complete
-    digitalWrite(LED_STATUS, LOW);
+    if (LED_STATUS >= 0) {
+        digitalWrite(LED_STATUS, LOW);
+    }
 
     DEBUG_PRINTLN("\n==================================");
     DEBUG_PRINTLN("System initialized successfully!");
+    DEBUG_PRINTF("Features: mqtt=%d web_ui=%d ota=%d debug=%d\n",
+                 features.mqtt, features.web_ui, features.ota, features.debug);
     DEBUG_PRINTLN("==================================\n");
 }
 
 void loop() {
     // Update all components
     irrigationController->update();
-    displayManager->update();
+
+#if LCD_ROWS > 0
+    if (displayManager) displayManager->update();
+#endif
+
     wifiManager->update();
-    homeAssistant->update();
+
+    if (features.mqtt && homeAssistant) homeAssistant->update();
 
     // Update system status periodically
     unsigned long currentMillis = millis();
@@ -124,18 +171,36 @@ void loop() {
         updateSystemStatus();
     }
 
-    // Flash blue LED if irrigating
-    if (irrigationController->isIrrigating()) {
-        static unsigned long lastBlink = 0;
-        static bool ledState = false;
-        if (currentMillis - lastBlink >= 500) {
-            lastBlink = currentMillis;
-            ledState = !ledState;
-            digitalWrite(LED_BLUE, ledState);
+    // Flash blue LED if irrigating (Board A only)
+    if (LED_BLUE >= 0) {
+        if (irrigationController->isIrrigating()) {
+            static unsigned long lastBlink = 0;
+            static bool ledState = false;
+            if (currentMillis - lastBlink >= 500) {
+                lastBlink = currentMillis;
+                ledState = !ledState;
+                digitalWrite(LED_BLUE, ledState);
+            }
+        } else {
+            digitalWrite(LED_BLUE, LOW);
+        }
+    }
+
+#if LCD_ROWS > 0
+    // Debug toggle: hold NEXT + SELECT for 3s (Board A only)
+    static unsigned long debugComboStart = 0;
+    if (digitalRead(BTN_NEXT) == LOW && digitalRead(BTN_SELECT) == LOW) {
+        if (debugComboStart == 0) debugComboStart = millis();
+        if (millis() - debugComboStart > 3000) {
+            features.debug = !features.debug;
+            DEBUG_PRINTF("Debug mode %s\n", features.debug ? "ON" : "OFF");
+            debugComboStart = 0;
+            delay(500); // debounce
         }
     } else {
-        digitalWrite(LED_BLUE, LOW);
+        debugComboStart = 0;
     }
+#endif
 
     // Small delay to prevent watchdog timeout
     delay(10);
@@ -153,7 +218,11 @@ void updateSystemStatus() {
     status.wifiConnected = wifiManager->isConnected();
 
     // Update MQTT status
-    status.mqttConnected = homeAssistant->isConnected();
+    if (features.mqtt && homeAssistant) {
+        status.mqttConnected = homeAssistant->isConnected();
+    } else {
+        status.mqttConnected = false;
+    }
 
     // Update current time if WiFi is connected
     if (status.wifiConnected && wifiManager->isTimeSynced()) {
@@ -193,7 +262,7 @@ void loadConfiguration() {
         return;
     }
 
-    StaticJsonDocument<512> doc;
+    StaticJsonDocument<1024> doc;
     DeserializationError error = deserializeJson(doc, file);
     file.close();
 
@@ -202,11 +271,22 @@ void loadConfiguration() {
         return;
     }
 
-    // Read configuration values
-    // You can add custom configuration loading here
-    // For example:
-    // String ssid = doc["wifi"]["ssid"] | WIFI_SSID;
-    // String password = doc["wifi"]["password"] | WIFI_PASSWORD;
+    // Read node identity
+    nodeId = doc["node_id"] | DEFAULT_NODE_ID;
+    nodeRole = doc["role"] | DEFAULT_ROLE;
+
+    // Read feature flags
+    JsonObject feat = doc["features"];
+    if (!feat.isNull()) {
+        features.multi_node = feat["multi_node"] | false;
+        features.mqtt = feat["mqtt"] | false;
+        features.web_ui = feat["web_ui"] | true;
+        features.sensors = feat["sensors"] | false;
+        features.battery = feat["battery"] | false;
+        features.ota = feat["ota"] | true;
+        features.debug = feat["debug"] | false;
+    }
 
     DEBUG_PRINTLN("Configuration loaded successfully");
+    DEBUG_PRINTF("Node: %s, Role: %s\n", nodeId.c_str(), nodeRole.c_str());
 }
