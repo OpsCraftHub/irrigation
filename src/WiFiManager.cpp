@@ -1264,6 +1264,13 @@ String WiFiManager::getStatusPage() {
         <div class="manual-control">
             <h2>Manual Control</h2>
             <div id="manualChannels"></div>
+            <div style="margin-top:10px;">
+                <button onclick="showChannelSetup()" style="background:#4a5568;color:white;border:none;padding:8px 16px;border-radius:4px;cursor:pointer;">Manage Channels</button>
+            </div>
+            <div id="channelSetup" style="display:none;margin-top:10px;padding:10px;background:#2d3748;border-radius:6px;">
+                <h3 style="margin:0 0 8px 0;">Enable/Disable Channels</h3>
+                <div id="channelSetupList"></div>
+            </div>
         </div>
 
         <div id="nodesSection" class="schedule-section" style="display:none;">
@@ -1499,6 +1506,51 @@ String WiFiManager::getStatusPage() {
                 }
             })
             .catch(() => {});
+        }
+
+        function showChannelSetup() {
+            const div = document.getElementById('channelSetup');
+            if (div.style.display === 'none') {
+                div.style.display = 'block';
+                loadChannelSetup();
+            } else {
+                div.style.display = 'none';
+            }
+        }
+
+        function loadChannelSetup() {
+            fetch('/api/channels/available')
+                .then(r => r.json())
+                .then(data => {
+                    const container = document.getElementById('channelSetupList');
+                    if (!data.success) return;
+                    let html = '';
+                    data.channels.forEach(ch => {
+                        const checked = ch.enabled ? 'checked' : '';
+                        html += `<div style="display:flex;align-items:center;gap:8px;padding:4px 0;">
+                            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+                                <input type="checkbox" ${checked} onchange="toggleChannelEnabled(${ch.channel}, this.checked)">
+                                Channel ${ch.channel} (GPIO ${ch.pin})
+                            </label>
+                        </div>`;
+                    });
+                    container.innerHTML = html;
+                });
+        }
+
+        function toggleChannelEnabled(channel, enabled) {
+            fetch('/api/channel/enable', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({channel: channel, enabled: enabled})
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.success) {
+                    loadScheduleData();
+                    loadChannelStatus();
+                }
+            });
         }
 
         function loadScheduleData() {
@@ -1998,13 +2050,14 @@ void WiFiManager::startWebServer() {
         doc["success"] = true;
 
         JsonArray channels = doc.createNestedArray("channels");
-        // Local channels always shown
+        // Only enabled local channels
         for (uint8_t i = 0; i < NUM_LOCAL_CHANNELS; i++) {
+            if (!_controller->isChannelEnabled(i + 1)) continue;
             JsonObject channel = channels.createNestedObject();
             channel["channel"] = i + 1;
             channel["pin"] = CHANNEL_PINS[i];
         }
-        // Virtual channels only shown if a slave is paired on them
+        // Virtual channels for paired slaves
         if (_nodeManager) {
             for (uint8_t i = 0; i < _nodeManager->getSlaveCount(); i++) {
                 const NodePeer* slave = _nodeManager->getSlave(i);
@@ -2118,15 +2171,16 @@ void WiFiManager::startWebServer() {
         doc["success"] = true;
 
         JsonArray channels = doc.createNestedArray("channels");
-        // Local channels
+        // Only enabled local channels
         for (uint8_t i = 0; i < NUM_LOCAL_CHANNELS; i++) {
+            if (!_controller->isChannelEnabled(i + 1)) continue;
             JsonObject ch = channels.createNestedObject();
             ch["channel"] = i + 1;
             ch["pin"] = CHANNEL_PINS[i];
             ch["running"] = _controller->isChannelIrrigating(i + 1);
             ch["inverted"] = _controller->isChannelInverted(i + 1);
         }
-        // Virtual channels for paired slaves only
+        // Virtual channels for paired slaves
         if (_nodeManager) {
             for (uint8_t s = 0; s < _nodeManager->getSlaveCount(); s++) {
                 const NodePeer* slave = _nodeManager->getSlave(s);
@@ -2179,6 +2233,43 @@ void WiFiManager::startWebServer() {
         _controller->setChannelInverted(channel, inverted);
         DEBUG_PRINTF("WiFiManager: Channel %d invert set to %d\n", channel, inverted);
         _webServer->send(200, "application/json", "{\"success\":true,\"message\":\"Invert setting updated\"}");
+    });
+
+    // Channel enable/disable API
+    _webServer->on("/api/channel/enable", HTTP_POST, [this]() {
+        if (!_controller || !_webServer->hasArg("plain")) {
+            _webServer->send(400, "application/json", "{\"success\":false,\"message\":\"Bad request\"}");
+            return;
+        }
+
+        StaticJsonDocument<128> doc;
+        deserializeJson(doc, _webServer->arg("plain"));
+        uint8_t channel = doc["channel"] | 0;
+        bool enabled = doc["enabled"] | true;
+
+        if (channel < 1 || channel > NUM_LOCAL_CHANNELS) {
+            _webServer->send(400, "application/json", "{\"success\":false,\"message\":\"Invalid channel\"}");
+            return;
+        }
+
+        _controller->setChannelEnabled(channel, enabled);
+        _webServer->send(200, "application/json", "{\"success\":true}");
+    });
+
+    // List all available local channels (for the "Add Channel" UI)
+    _webServer->on("/api/channels/available", HTTP_GET, [this]() {
+        StaticJsonDocument<512> doc;
+        doc["success"] = true;
+        JsonArray channels = doc.createNestedArray("channels");
+        for (uint8_t i = 0; i < NUM_LOCAL_CHANNELS; i++) {
+            JsonObject ch = channels.createNestedObject();
+            ch["channel"] = i + 1;
+            ch["pin"] = CHANNEL_PINS[i];
+            ch["enabled"] = _controller->isChannelEnabled(i + 1);
+        }
+        String json;
+        serializeJson(doc, json);
+        _webServer->send(200, "application/json", json);
     });
 
     // Channel start API

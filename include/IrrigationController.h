@@ -48,9 +48,11 @@ public:
     unsigned long getNextScheduledTime() const;
     uint8_t getChannelPin(uint8_t channel) const;
 
-    // Channel invert settings
+    // Channel settings
     bool isChannelInverted(uint8_t channel) const;
     void setChannelInverted(uint8_t channel, bool inverted);
+    bool isChannelEnabled(uint8_t channel) const;
+    void setChannelEnabled(uint8_t channel, bool enabled);
     bool saveChannelSettings();
     bool loadChannelSettings();
 
@@ -81,6 +83,7 @@ private:
     unsigned long _irrigationStartMillis;
     uint16_t _currentDurationMinutes;
     RemoteValveCallback _remoteValveCallback = nullptr;
+    bool _channelEnabled[MAX_CHANNELS];
 };
 
 #endif // IRRIGATION_CONTROLLER_H

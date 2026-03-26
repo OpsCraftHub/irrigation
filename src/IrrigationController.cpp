@@ -11,6 +11,11 @@ IrrigationController::IrrigationController()
     // Initialize status
     memset(&_status, 0, sizeof(SystemStatus));
 
+    // All local channels disabled by default (user enables via UI)
+    for (int i = 0; i < MAX_CHANNELS; i++) {
+        _channelEnabled[i] = false;
+    }
+
     // Initialize schedules
     for (int i = 0; i < MAX_SCHEDULES; i++) {
         _schedules[i].enabled = false;
@@ -569,12 +574,29 @@ void IrrigationController::setChannelInverted(uint8_t channel, bool inverted) {
     DEBUG_PRINTF("IrrigationController: Channel %d invert set to %d\n", channel, inverted);
 }
 
+bool IrrigationController::isChannelEnabled(uint8_t channel) const {
+    if (channel < 1 || channel > MAX_CHANNELS) return false;
+    return _channelEnabled[channel - 1];
+}
+
+void IrrigationController::setChannelEnabled(uint8_t channel, bool enabled) {
+    if (channel < 1 || channel > MAX_CHANNELS) return;
+    _channelEnabled[channel - 1] = enabled;
+    saveChannelSettings();
+    DEBUG_PRINTF("IrrigationController: Channel %d enabled set to %d\n", channel, enabled);
+}
+
 bool IrrigationController::saveChannelSettings() {
-    StaticJsonDocument<256> doc;
+    StaticJsonDocument<512> doc;
 
     JsonArray inverted = doc.createNestedArray("inverted");
     for (uint8_t i = 0; i < MAX_CHANNELS; i++) {
         inverted.add(_status.channelInverted[i]);
+    }
+
+    JsonArray enabled = doc.createNestedArray("enabled");
+    for (uint8_t i = 0; i < NUM_LOCAL_CHANNELS; i++) {
+        enabled.add(_channelEnabled[i]);
     }
 
     File file = SPIFFS.open("/channel_settings.json", "w");
@@ -618,6 +640,13 @@ bool IrrigationController::loadChannelSettings() {
     JsonArray inverted = doc["inverted"];
     for (uint8_t i = 0; i < MAX_CHANNELS && i < inverted.size(); i++) {
         _status.channelInverted[i] = inverted[i] | false;
+    }
+
+    JsonArray enabled = doc["enabled"];
+    if (enabled.size() > 0) {
+        for (uint8_t i = 0; i < NUM_LOCAL_CHANNELS && i < enabled.size(); i++) {
+            _channelEnabled[i] = enabled[i] | false;
+        }
     }
 
     DEBUG_PRINTLN("IrrigationController: Channel settings loaded");
