@@ -1019,6 +1019,40 @@ String WiFiManager::getStatusPage() {
         .schedule-form input[type="number"]::-webkit-inner-spin-button {
             filter: invert(1);
         }
+        .day-picker {
+            display: flex;
+            gap: 6px;
+            margin-bottom: 10px;
+        }
+        .day-picker label {
+            display: inline-block !important;
+            margin: 0 !important;
+            font-weight: normal !important;
+        }
+        .day-btn {
+            width: 38px;
+            height: 38px;
+            border-radius: 50%;
+            border: 2px solid rgba(255,255,255,0.2);
+            background: rgba(0,0,0,0.2);
+            color: rgba(255,255,255,0.5);
+            font-size: 13px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .day-btn.active {
+            border-color: #48bb78;
+            background: rgba(72,187,120,0.25);
+            color: #48bb78;
+        }
+        .day-label {
+            font-size: 11px;
+            color: rgba(255,255,255,0.4);
+            margin-bottom: 8px;
+            display: block;
+            font-weight: bold;
+        }
         .form-actions {
             display: flex;
             gap: 10px;
@@ -1323,6 +1357,17 @@ String WiFiManager::getStatusPage() {
                 <label for="scheduleDuration">Duration (minutes)</label>
                 <input type="number" id="scheduleDuration" min="1" max="240" value="30">
 
+                <span class="day-label">Days</span>
+                <div class="day-picker" id="dayPicker">
+                    <button type="button" class="day-btn active" data-day="0">S</button>
+                    <button type="button" class="day-btn active" data-day="1">M</button>
+                    <button type="button" class="day-btn active" data-day="2">T</button>
+                    <button type="button" class="day-btn active" data-day="3">W</button>
+                    <button type="button" class="day-btn active" data-day="4">T</button>
+                    <button type="button" class="day-btn active" data-day="5">F</button>
+                    <button type="button" class="day-btn active" data-day="6">S</button>
+                </div>
+
                 <div class="form-actions">
                     <button type="button" onclick="saveSchedule()">Save</button>
                     <button type="button" class="secondary" onclick="cancelSchedule()">Cancel</button>
@@ -1339,13 +1384,54 @@ String WiFiManager::getStatusPage() {
         let slaveNodes = {};
         let editingScheduleId = null;
 
+        const DAY_NAMES = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+
         document.addEventListener('DOMContentLoaded', function() {
             loadScheduleData();
             loadChannelStatus();
             loadNodeStatus();
             setInterval(loadChannelStatus, 2000);
             setInterval(loadNodeStatus, 2000);
+
+            // Day picker toggle
+            document.querySelectorAll('.day-btn').forEach(btn => {
+                btn.addEventListener('click', function() {
+                    this.classList.toggle('active');
+                });
+            });
         });
+
+        function getWeekdaysMask() {
+            let mask = 0;
+            document.querySelectorAll('.day-btn').forEach(btn => {
+                if (btn.classList.contains('active')) {
+                    mask |= (1 << parseInt(btn.dataset.day));
+                }
+            });
+            return mask;
+        }
+
+        function setWeekdaysMask(mask) {
+            document.querySelectorAll('.day-btn').forEach(btn => {
+                const day = parseInt(btn.dataset.day);
+                if (mask & (1 << day)) {
+                    btn.classList.add('active');
+                } else {
+                    btn.classList.remove('active');
+                }
+            });
+        }
+
+        function formatDays(weekdays) {
+            if (weekdays === 0x7F) return 'Daily';
+            if (weekdays === 0x3E) return 'Weekdays';
+            if (weekdays === 0x41) return 'Weekends';
+            let days = [];
+            for (let i = 0; i < 7; i++) {
+                if (weekdays & (1 << i)) days.push(DAY_NAMES[i]);
+            }
+            return days.join(', ');
+        }
 
         function loadChannelStatus() {
             fetch('/api/channels/status')
@@ -1636,11 +1722,13 @@ String WiFiManager::getStatusPage() {
                     const skipBtn = skipped
                         ? `<button class="pill-action" onclick="unskipSchedule(${schedule.id})" title="Unskip" style="color:#48bb78;">&#x21ba;</button>`
                         : `<button class="pill-action" onclick="skipSchedule(${schedule.id})" title="Skip next run" style="color:#f6ad55;">&#x23ed;</button>`;
+                    const wd = schedule.weekdays !== undefined ? schedule.weekdays : 0x7F;
+                    const dayText = formatDays(wd);
                     html += `<div class="schedule-pill">
-                        <div style="${skipStyle}"><strong>${formatTime(schedule.hour, schedule.minute)}</strong> - ${schedule.duration} min${skipped ? ' (skipped)' : ''}</div>
+                        <div style="${skipStyle}"><strong>${formatTime(schedule.hour, schedule.minute)}</strong> - ${schedule.duration} min<br><span style="font-size:11px;opacity:0.7;">${dayText}</span>${skipped ? ' (skipped)' : ''}</div>
                         <div style="display:flex;gap:4px;">
                             ${skipBtn}
-                            <button class="pill-action" onclick="editSchedule(${schedule.id},${schedule.channel},'${formatTime(schedule.hour,schedule.minute)}',${schedule.duration})" title="Edit">&#9998;</button>
+                            <button class="pill-action" onclick="editSchedule(${schedule.id},${schedule.channel},'${formatTime(schedule.hour,schedule.minute)}',${schedule.duration},${wd})" title="Edit">&#9998;</button>
                             <button class="pill-action" onclick="deleteSchedule(${schedule.id})">&times;</button>
                         </div>
                     </div>`;
@@ -1684,6 +1772,7 @@ String WiFiManager::getStatusPage() {
             const duration = document.getElementById('scheduleDuration');
             if (time) time.value = '06:00';
             if (duration) duration.value = 30;
+            setWeekdaysMask(0x7F);
             if (resetMessage) {
                 showScheduleMessage('', false);
             }
@@ -1703,7 +1792,7 @@ String WiFiManager::getStatusPage() {
             msg.innerHTML = text;
         }
 
-        function editSchedule(id, channel, time, duration) {
+        function editSchedule(id, channel, time, duration, weekdays) {
             editingScheduleId = id;
             const select = document.getElementById('channelSelect');
             const timeInput = document.getElementById('scheduleTime');
@@ -1711,6 +1800,7 @@ String WiFiManager::getStatusPage() {
             if (select) select.value = channel;
             if (timeInput) timeInput.value = time;
             if (durationInput) durationInput.value = duration;
+            setWeekdaysMask(weekdays !== undefined ? weekdays : 0x7F);
             setScheduleForm(true);
         }
 
@@ -1735,11 +1825,18 @@ String WiFiManager::getStatusPage() {
                 return;
             }
 
+            const weekdays = getWeekdaysMask();
+            if (weekdays === 0) {
+                showScheduleMessage('Select at least one day.', true);
+                return;
+            }
+
             const payload = {
                 channel: parseInt(select.value, 10),
                 hour: parseInt(parts[0], 10),
                 minute: parseInt(parts[1], 10),
-                duration: parseInt(duration.value, 10)
+                duration: parseInt(duration.value, 10),
+                weekdays: weekdays
             };
 
             if (!payload.channel || payload.duration <= 0) {
@@ -2148,6 +2245,7 @@ void WiFiManager::startWebServer() {
             entry["hour"] = schedules[i].hour;
             entry["minute"] = schedules[i].minute;
             entry["duration"] = schedules[i].durationMinutes;
+            entry["weekdays"] = schedules[i].weekdays;
             entry["pin"] = _controller->getChannelPin(schedules[i].channel);
             entry["skipped"] = _controller->isScheduleSkipped(i);
         }
