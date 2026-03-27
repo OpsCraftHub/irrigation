@@ -152,16 +152,18 @@ void DisplayManager::drawStatusScreen() {
         unsigned long secs = (remaining % 60000) / 1000;
         snprintf(line2, 17, "Ch%d RUN   %02lu:%02lu", runningCh, mins, secs);
     } else {
-        // Show next scheduled run
-        unsigned long nextTime = _controller->getNextScheduledTime();
+        // Show next scheduled run with channel
+        uint8_t nextCh = 0;
+        unsigned long nextTime = _controller->getNextScheduledTime(&nextCh);
         if (nextTime > 0) {
             struct tm nextInfo;
             time_t nt = (time_t)nextTime;
             localtime_r(&nt, &nextInfo);
-            snprintf(line2, 17, "Next %02d:%02d     ",
-                nextInfo.tm_hour, nextInfo.tm_min);
+            snprintf(line2, 17, "Nxt Ch%d %02d:%02d  ",
+                nextCh, nextInfo.tm_hour, nextInfo.tm_min);
         } else {
-            snprintf(line2, 17, "No schedules    ");
+            // Could be no schedules or all skipped
+            snprintf(line2, 17, "Skipped/None    ");
         }
     }
 

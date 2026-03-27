@@ -871,6 +871,7 @@ String WiFiManager::getStatusPage() {
 <!DOCTYPE html>
 <html>
 <head>
+    <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Irrigation Status</title>
     <style>
@@ -1197,12 +1198,13 @@ String WiFiManager::getStatusPage() {
 
     // Line 4: Next scheduled time
     page += "<div class='lcd-line'>";
-    time_t nextTime = _controller->getNextScheduledTime();
+    uint8_t nextCh = 0;
+    time_t nextTime = _controller->getNextScheduledTime(&nextCh);
     if (nextTime > 0) {
         struct tm timeinfo;
         localtime_r(&nextTime, &timeinfo);
-        char buf[20];
-        sprintf(buf, "Next: %02d:%02d", timeinfo.tm_hour, timeinfo.tm_min);
+        char buf[32];
+        sprintf(buf, "Next: Ch %d @ %02d:%02d", nextCh, timeinfo.tm_hour, timeinfo.tm_min);
         page += buf;
     } else {
         page += "No schedules";
@@ -1255,23 +1257,16 @@ String WiFiManager::getStatusPage() {
         </div>
 
         <div class="manual-control">
-            <h2>Manual Control</h2>
-            <div id="manualChannels"></div>
-            <div style="margin-top:10px;">
-                <button onclick="showChannelSetup()" style="background:#4a5568;color:white;border:none;padding:8px 16px;border-radius:4px;cursor:pointer;">Manage Channels</button>
+            <div class="section-header">
+                <h2>Manual Control</h2>
+                <button type="button" class="add-btn" onclick="showChannelSetup()">+</button>
             </div>
+            <div id="pendingPairContainer"></div>
+            <div id="manualChannels"></div>
             <div id="channelSetup" style="display:none;margin-top:10px;padding:10px;background:#2d3748;border-radius:6px;">
                 <h3 style="margin:0 0 8px 0;">Enable/Disable Channels</h3>
                 <div id="channelSetupList"></div>
             </div>
-        </div>
-
-        <div id="nodesSection" class="schedule-section" style="display:none;">
-            <div class="section-header">
-                <h2>Nodes</h2>
-            </div>
-            <div id="pendingPairContainer"></div>
-            <div id="pairedSlavesList" class="channel-grid"></div>
         </div>
 
         <div class="schedule-section">
@@ -1302,6 +1297,8 @@ String WiFiManager::getStatusPage() {
         let channelMeta = [];
         let channelStatus = {};
         let channelInverted = {};
+        let slaveNodes = {};
+        let editingScheduleId = null;
 
         document.addEventListener('DOMContentLoaded', function() {
             loadScheduleData();
@@ -1333,59 +1330,32 @@ String WiFiManager::getStatusPage() {
                 .then(response => response.json())
                 .then(data => {
                     if (!data.success) return;
-                    const section = document.getElementById('nodesSection');
                     const slaves = data.slaves || [];
                     const pending = data.pending;
-                    if (!section) return;
-                    if (!pending && slaves.length === 0) {
-                        section.style.display = 'none';
-                        return;
-                    }
-                    section.style.display = 'block';
 
-                    // Pending pair request
+                    // Store slave data keyed by virtual_channel for renderManualControls
+                    slaveNodes = {};
+                    slaves.forEach(s => { slaveNodes[s.virtual_channel] = s; });
+
+                    // Pending pair request — shown above channel list
                     const pendingDiv = document.getElementById('pendingPairContainer');
                     if (pending) {
-                        pendingDiv.innerHTML = `<div class="channel-card" style="border-color:#f6ad55;">
-                            <div class="channel-card-header">
-                                <h3 style="color:#f6ad55;">Pair Request: ${pending.name}</h3>
+                        pendingDiv.innerHTML = `<div class="channel-row" style="border:1px solid #f6ad55;border-radius:6px;padding:8px;margin-bottom:8px;">
+                            <div class="channel-label" style="flex:1;">
+                                <strong style="color:#f6ad55;">Pair: ${pending.name}</strong>
+                                <span class="pin">${pending.node_id}</span>
                             </div>
-                            <div style="padding:5px 0;font-size:14px;">
-                                ID: ${pending.node_id} &middot; Channels: ${pending.num_channels} &middot; IP: ${pending.ip}
-                            </div>
-                            <div class="form-actions" style="margin-top:10px;">
-                                <button type="button" onclick="acceptPair()" style="background:#48bb78;color:#fff;border:none;padding:10px;border-radius:5px;cursor:pointer;flex:1;">Accept</button>
-                                <button type="button" onclick="rejectPair()" style="background:#e53e3e;color:#fff;border:none;padding:10px;border-radius:5px;cursor:pointer;flex:1;">Reject</button>
+                            <div class="toggle-btns">
+                                <button class="toggle-btn on" onclick="acceptPair()">Accept</button>
+                                <button class="toggle-btn off" onclick="rejectPair()">Reject</button>
                             </div>
                         </div>`;
                     } else {
                         pendingDiv.innerHTML = '';
                     }
 
-                    // Paired slaves list
-                    const listDiv = document.getElementById('pairedSlavesList');
-                    if (slaves.length === 0) {
-                        listDiv.innerHTML = '';
-                        return;
-                    }
-                    let html = '';
-                    slaves.forEach(s => {
-                        const statusClass = s.online ? 'running' : 'stopped';
-                        const statusText = s.online ? 'ONLINE' : 'OFFLINE';
-                        const displayName = s.name || s.node_id;
-                        html += `<div class="channel-card">
-                            <div class="channel-card-header">
-                                <span id="name_display_${s.node_id}" onclick="startRename('${s.node_id}','${displayName}')" style="cursor:pointer;" title="Click to rename"><h3 style="display:inline;margin:0;">${displayName}</h3> &#9998;</span>
-                                <input id="name_input_${s.node_id}" style="display:none;background:#111;color:#0f0;border:1px solid #0f0;border-radius:4px;padding:4px 8px;font-size:16px;font-family:inherit;width:60%;" onkeydown="if(event.key==='Enter')saveRename('${s.node_id}')" />
-                                <span class="channel-status ${statusClass}">${statusText}</span>
-                            </div>
-                            <div style="font-size:13px;color:#aaa;">
-                                ID: ${s.node_id} &middot; Ch: ${s.virtual_channel} &middot; RSSI: ${s.rssi}dBm
-                            </div>
-                            <button type="button" onclick="unpairSlave('${s.node_id}')" style="margin-top:8px;padding:6px 12px;background:#e53e3e;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:12px;">Unpair</button>
-                        </div>`;
-                    });
-                    listDiv.innerHTML = html;
+                    // Re-render manual controls to pick up online/offline status
+                    renderManualControls();
                 })
                 .catch(() => {});
         }
@@ -1453,12 +1423,22 @@ String WiFiManager::getStatusPage() {
                 const inverted = channelInverted[ch.channel] || false;
                 const statusClass = running ? 'running' : 'stopped';
                 const statusText = running ? 'RUNNING' : 'OFF';
-                const pinLabel = ch.remote ? `<span class="pin">${ch.slave || 'Remote'}</span>` : `<span class="pin">GPIO ${ch.pin}</span>`;
+                let pinLabel, onlineFlag = '';
+                if (ch.remote) {
+                    const slave = slaveNodes[ch.channel];
+                    const name = (slave && slave.name) ? slave.name : (ch.slave || 'Remote');
+                    const online = slave ? slave.online : false;
+                    pinLabel = `<span class="pin">${name}</span>`;
+                    onlineFlag = `<button class="invert-btn${online ? ' active' : ''}" style="font-size:9px;padding:1px 4px;" disabled>${online ? 'ON' : 'OFF'}</button>`;
+                } else {
+                    pinLabel = `<span class="pin">GPIO ${ch.pin}</span>`;
+                }
                 html += `<div class="channel-row">
                     <div class="channel-label">
                         Channel ${ch.channel} ${pinLabel}
                         <span class="channel-status ${statusClass}">${statusText}</span>
                         <button class="invert-btn${inverted ? ' active' : ''}" onclick="toggleInvert(${ch.channel})">INV</button>
+                        ${onlineFlag}
                     </div>
                     <div class="toggle-btns">
                         <button class="toggle-btn on${running ? ' active' : ''}" onclick="toggleChannel(${ch.channel}, true)">ON</button>
@@ -1576,7 +1556,7 @@ String WiFiManager::getStatusPage() {
             channelMeta.forEach(channel => {
                 const option = document.createElement('option');
                 option.value = channel.channel;
-                option.textContent = channel.remote ? `Channel ${channel.channel} • ${channel.slave || 'Remote'}` : `Channel ${channel.channel} • GPIO ${channel.pin}`;
+                option.textContent = channel.remote ? `Channel ${channel.channel} - ${channel.slave || 'Remote'}` : `Channel ${channel.channel} - GPIO ${channel.pin}`;
                 select.appendChild(option);
             });
         }
@@ -1605,16 +1585,25 @@ String WiFiManager::getStatusPage() {
                     return (a.hour * 60 + a.minute) - (b.hour * 60 + b.minute);
                 });
                 const meta = channelMeta.find(entry => entry.channel === Number(channelKey));
-                const pinLabel = meta ? ` · GPIO ${meta.pin}` : '';
+                const pinLabel = meta ? (meta.remote ? ` - ${meta.slave || 'Remote'}` : ` - GPIO ${meta.pin}`) : '';
                 html += `<div class="channel-card">
                     <div class="channel-card-header">
                         <h3>Channel ${channelKey}${pinLabel}</h3>
                     </div>
                     <div class="channel-card-body">`;
                 entries.forEach(schedule => {
+                    const skipped = schedule.skipped;
+                    const skipStyle = skipped ? 'opacity:0.5;text-decoration:line-through;' : '';
+                    const skipBtn = skipped
+                        ? `<button class="pill-action" onclick="unskipSchedule(${schedule.id})" title="Unskip" style="color:#48bb78;">&#x21ba;</button>`
+                        : `<button class="pill-action" onclick="skipSchedule(${schedule.id})" title="Skip next run" style="color:#f6ad55;">&#x23ed;</button>`;
                     html += `<div class="schedule-pill">
-                        <div><strong>${formatTime(schedule.hour, schedule.minute)}</strong> · ${schedule.duration} min</div>
-                        <button class="pill-action" onclick="deleteSchedule(${schedule.id})">&times;</button>
+                        <div style="${skipStyle}"><strong>${formatTime(schedule.hour, schedule.minute)}</strong> - ${schedule.duration} min${skipped ? ' (skipped)' : ''}</div>
+                        <div style="display:flex;gap:4px;">
+                            ${skipBtn}
+                            <button class="pill-action" onclick="editSchedule(${schedule.id},${schedule.channel},'${formatTime(schedule.hour,schedule.minute)}',${schedule.duration})" title="Edit">&#9998;</button>
+                            <button class="pill-action" onclick="deleteSchedule(${schedule.id})">&times;</button>
+                        </div>
                     </div>`;
                 });
                 html += `</div></div>`;
@@ -1651,6 +1640,7 @@ String WiFiManager::getStatusPage() {
             if (resetMessage === undefined) {
                 resetMessage = true;
             }
+            editingScheduleId = null;
             const time = document.getElementById('scheduleTime');
             const duration = document.getElementById('scheduleDuration');
             if (time) time.value = '06:00';
@@ -1672,6 +1662,17 @@ String WiFiManager::getStatusPage() {
             msg.style.background = isError ? 'rgba(255,0,0,0.2)' : 'rgba(0,255,0,0.15)';
             msg.style.color = isError ? '#ff6666' : '#0f0';
             msg.innerHTML = text;
+        }
+
+        function editSchedule(id, channel, time, duration) {
+            editingScheduleId = id;
+            const select = document.getElementById('channelSelect');
+            const timeInput = document.getElementById('scheduleTime');
+            const durationInput = document.getElementById('scheduleDuration');
+            if (select) select.value = channel;
+            if (timeInput) timeInput.value = time;
+            if (durationInput) durationInput.value = duration;
+            setScheduleForm(true);
         }
 
         function saveSchedule() {
@@ -1709,6 +1710,10 @@ String WiFiManager::getStatusPage() {
 
             showScheduleMessage('Saving schedule...', false);
 
+            if (editingScheduleId !== null) {
+                payload.id = editingScheduleId;
+            }
+
             fetch('/api/schedules', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
@@ -1717,6 +1722,7 @@ String WiFiManager::getStatusPage() {
             .then(response => response.json())
             .then(data => {
                 if (data.success) {
+                    editingScheduleId = null;
                     cancelSchedule(false);
                     showScheduleMessage('Schedule saved.', false);
                     loadScheduleData();
@@ -1727,6 +1733,28 @@ String WiFiManager::getStatusPage() {
             .catch(error => {
                 showScheduleMessage('Failed to save schedule: ' + error, true);
             });
+        }
+
+        function skipSchedule(id) {
+            fetch('/api/schedule/skip', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({id: id})
+            })
+            .then(r => r.json())
+            .then(() => loadScheduleData())
+            .catch(() => {});
+        }
+
+        function unskipSchedule(id) {
+            fetch('/api/schedule/unskip', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({id: id})
+            })
+            .then(r => r.json())
+            .then(() => loadScheduleData())
+            .catch(() => {});
         }
 
         function deleteSchedule(index) {
@@ -2082,6 +2110,7 @@ void WiFiManager::startWebServer() {
             entry["minute"] = schedules[i].minute;
             entry["duration"] = schedules[i].durationMinutes;
             entry["pin"] = _controller->getChannelPin(schedules[i].channel);
+            entry["skipped"] = _controller->isScheduleSkipped(i);
         }
 
         String json;
@@ -2112,6 +2141,7 @@ void WiFiManager::startWebServer() {
         uint8_t minute = doc["minute"] | 0;
         uint16_t duration = doc["duration"] | DEFAULT_DURATION_MINUTES;
         uint8_t weekdays = doc["weekdays"] | 0x7F;
+        int16_t editId = doc["id"] | -1;
 
         if (channel < 1 || channel > MAX_CHANNELS) {
             _webServer->send(400, "application/json", "{\"success\":false,\"message\":\"Invalid channel\"}");
@@ -2126,11 +2156,44 @@ void WiFiManager::startWebServer() {
             return;
         }
 
-        int8_t index = _controller->addSchedule(channel, hour, minute, duration, weekdays);
-        if (index >= 0) {
-            _webServer->send(200, "application/json", "{\"success\":true,\"message\":\"Schedule saved\",\"index\":" + String(index) + "}");
+        if (editId >= 0) {
+            // Update existing schedule
+            if (_controller->updateSchedule((uint8_t)editId, channel, hour, minute, duration, weekdays)) {
+                // Sync to slave if virtual channel
+                if (_nodeManager && channel > NUM_LOCAL_CHANNELS) {
+                    const NodePeer* slave = _nodeManager->getSlave(0);
+                    for (uint8_t s = 0; s < _nodeManager->getSlaveCount(); s++) {
+                        slave = _nodeManager->getSlave(s);
+                        if (slave && channel >= slave->base_virtual_ch &&
+                            channel < slave->base_virtual_ch + slave->num_channels) {
+                            _nodeManager->sendScheduleSync(slave->node_id);
+                            break;
+                        }
+                    }
+                }
+                _webServer->send(200, "application/json", "{\"success\":true,\"message\":\"Schedule updated\"}");
+            } else {
+                _webServer->send(500, "application/json", "{\"success\":false,\"message\":\"Unable to update schedule\"}");
+            }
         } else {
-            _webServer->send(500, "application/json", "{\"success\":false,\"message\":\"Unable to save schedule\"}");
+            // Add new schedule
+            int8_t index = _controller->addSchedule(channel, hour, minute, duration, weekdays);
+            if (index >= 0) {
+                // Sync to slave if virtual channel
+                if (_nodeManager && channel > NUM_LOCAL_CHANNELS) {
+                    for (uint8_t s = 0; s < _nodeManager->getSlaveCount(); s++) {
+                        const NodePeer* slave = _nodeManager->getSlave(s);
+                        if (slave && channel >= slave->base_virtual_ch &&
+                            channel < slave->base_virtual_ch + slave->num_channels) {
+                            _nodeManager->sendScheduleSync(slave->node_id);
+                            break;
+                        }
+                    }
+                }
+                _webServer->send(200, "application/json", "{\"success\":true,\"message\":\"Schedule saved\",\"index\":" + String(index) + "}");
+            } else {
+                _webServer->send(500, "application/json", "{\"success\":false,\"message\":\"Unable to save schedule\"}");
+            }
         }
     });
 
@@ -2146,7 +2209,23 @@ void WiFiManager::startWebServer() {
         }
 
         uint8_t index = _webServer->arg("id").toInt();
+
+        // Before removing, check if it belongs to a slave so we can sync after
+        IrrigationSchedule sched = _controller->getSchedule(index);
+        uint8_t schedCh = sched.channel;
+
         if (_controller->removeSchedule(index)) {
+            // Sync to slave if the removed schedule was for a virtual channel
+            if (_nodeManager && schedCh > NUM_LOCAL_CHANNELS) {
+                for (uint8_t s = 0; s < _nodeManager->getSlaveCount(); s++) {
+                    const NodePeer* slave = _nodeManager->getSlave(s);
+                    if (slave && schedCh >= slave->base_virtual_ch &&
+                        schedCh < slave->base_virtual_ch + slave->num_channels) {
+                        _nodeManager->sendScheduleSync(slave->node_id);
+                        break;
+                    }
+                }
+            }
             _webServer->send(200, "application/json", "{\"success\":true,\"message\":\"Schedule removed\"}");
         } else {
             _webServer->send(500, "application/json", "{\"success\":false,\"message\":\"Failed to remove schedule\"}");
@@ -2266,6 +2345,55 @@ void WiFiManager::startWebServer() {
     });
 
     // Channel start API
+    _webServer->on("/api/schedule/skip", HTTP_POST, [this]() {
+        if (!_controller) {
+            _webServer->send(500, "application/json", "{\"success\":false,\"message\":\"Controller not ready\"}");
+            return;
+        }
+        if (!_webServer->hasArg("plain")) {
+            _webServer->send(400, "application/json", "{\"success\":false,\"message\":\"Missing payload\"}");
+            return;
+        }
+        DynamicJsonDocument doc(128);
+        deserializeJson(doc, _webServer->arg("plain"));
+        uint8_t id = doc["id"] | 255;
+        if (id >= MAX_SCHEDULES) {
+            _webServer->send(400, "application/json", "{\"success\":false,\"message\":\"Invalid schedule id\"}");
+            return;
+        }
+        _controller->skipSchedule(id);
+
+        // Forward skip to slave if schedule is for a virtual channel
+        if (_nodeManager) {
+            IrrigationSchedule sched = _controller->getSchedule(id);
+            if (sched.channel > NUM_LOCAL_CHANNELS) {
+                _nodeManager->sendSkipToSlave(sched.channel, id);
+            }
+        }
+
+        _webServer->send(200, "application/json", "{\"success\":true,\"message\":\"Schedule skipped\"}");
+    });
+
+    _webServer->on("/api/schedule/unskip", HTTP_POST, [this]() {
+        if (!_controller) {
+            _webServer->send(500, "application/json", "{\"success\":false,\"message\":\"Controller not ready\"}");
+            return;
+        }
+        if (!_webServer->hasArg("plain")) {
+            _webServer->send(400, "application/json", "{\"success\":false,\"message\":\"Missing payload\"}");
+            return;
+        }
+        DynamicJsonDocument doc(128);
+        deserializeJson(doc, _webServer->arg("plain"));
+        uint8_t id = doc["id"] | 255;
+        if (id >= MAX_SCHEDULES) {
+            _webServer->send(400, "application/json", "{\"success\":false,\"message\":\"Invalid schedule id\"}");
+            return;
+        }
+        _controller->unskipSchedule(id);
+        _webServer->send(200, "application/json", "{\"success\":true,\"message\":\"Schedule unskipped\"}");
+    });
+
     _webServer->on("/api/channel/start", HTTP_POST, [this]() {
         if (!_controller) {
             _webServer->send(500, "application/json", "{\"success\":false,\"message\":\"Controller not ready\"}");

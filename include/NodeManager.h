@@ -82,6 +82,10 @@ public:
     bool sendStart(uint8_t virtualChannel, uint16_t durationMinutes);
     bool sendStop(uint8_t virtualChannel);
 
+    // Master: schedule sync — push schedules to slave
+    void sendScheduleSync(const char* slaveNodeId);
+    void sendSkipToSlave(uint8_t virtualChannel, uint8_t scheduleIndex);
+
     // Slave peer info (for master)
     const NodePeer* getSlave(uint8_t index) const;
     uint8_t getSlaveCount() const { return _slaveCount; }
@@ -131,6 +135,14 @@ private:
     void handleHeartbeat(IPAddress senderIp, uint16_t senderPort,
                          const IrrigationMsg& msg);
     void handleHeartbeatAck(const IrrigationMsg& msg);
+
+    // Schedule sync handlers
+    void handleScheduleSet(IPAddress senderIp, uint16_t senderPort,
+                           const IrrigationMsg& msg);
+    void handleScheduleAck(const IrrigationMsg& msg);
+    void handleCmdSkip(IPAddress senderIp, uint16_t senderPort,
+                       const IrrigationMsg& msg);
+    void syncSchedulesForSlave(NodePeer* slave);
 
     // Pairing handlers
     void handlePairRequest(IPAddress senderIp, uint16_t senderPort,

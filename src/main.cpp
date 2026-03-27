@@ -321,7 +321,16 @@ void onPairResponse(bool accepted) {
     if (!nodeManager) return;
     if (accepted) {
         DEBUG_PRINTLN("User accepted pair request");
+        const PendingPairRequest& pending = nodeManager->getPendingPair();
+        char newSlaveId[12];
+        strncpy(newSlaveId, pending.node_id, sizeof(newSlaveId) - 1);
+        newSlaveId[sizeof(newSlaveId) - 1] = '\0';
+
         nodeManager->acceptPendingPair();
+
+        // Push all relevant schedules to the newly paired slave
+        nodeManager->sendScheduleSync(newSlaveId);
+
 #if LCD_ROWS > 0
         if (displayManager) {
             displayManager->clearPairRequest();

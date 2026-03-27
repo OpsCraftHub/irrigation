@@ -24,6 +24,7 @@ IrrigationController::IrrigationController()
         _schedules[i].minute = 0;
         _schedules[i].durationMinutes = DEFAULT_DURATION_MINUTES;
         _schedules[i].weekdays = 0x7F; // All days
+        _skipUntil[i] = 0;
     }
 }
 
@@ -84,7 +85,7 @@ void IrrigationController::update() {
     }
 }
 
-void IrrigationController::startIrrigation(uint8_t channel, uint16_t durationMinutes) {
+void IrrigationController::startIrrigation(uint8_t channel, uint16_t durationMinutes, bool manual) {
     // Validate channel
     if (channel < 1 || channel > MAX_CHANNELS) {
         DEBUG_PRINTF("Invalid channel: %d\n", channel);
@@ -99,7 +100,8 @@ void IrrigationController::startIrrigation(uint8_t channel, uint16_t durationMin
         durationMinutes = MAX_DURATION_MINUTES;
     }
 
-    DEBUG_PRINTF("IrrigationController: Starting irrigation on channel %d for %d minutes\n", channel, durationMinutes);
+    DEBUG_PRINTF("IrrigationController: Starting irrigation on channel %d for %d minutes (manual=%d)\n",
+                 channel, durationMinutes, manual);
 
     uint8_t idx = channel - 1;  // Convert to 0-based index
 
@@ -112,7 +114,7 @@ void IrrigationController::startIrrigation(uint8_t channel, uint16_t durationMin
     _currentDurationMinutes = durationMinutes;
     _status.currentDuration = durationMinutes;
 
-    activateValve(channel, true);
+    activateValve(channel, true, manual);
 }
 
 void IrrigationController::stopIrrigation(uint8_t channel) {
@@ -194,6 +196,16 @@ void IrrigationController::checkSchedules() {
 
     for (int i = 0; i < MAX_SCHEDULES; i++) {
         if (_schedules[i].enabled && shouldRunSchedule(_schedules[i], now)) {
+            // Check skip-until (RAM only, resets on reboot)
+            if (_skipUntil[i] > 0 && now <= _skipUntil[i]) {
+                DEBUG_PRINTF("IrrigationController: Schedule %d skipped by user\n", i);
+                // Clear skip after the minute passes so it doesn't block forever
+                if (now > _skipUntil[i] - 60) {
+                    _skipUntil[i] = 0;
+                }
+                continue;
+            }
+
             uint8_t channel = _schedules[i].channel;
 
             // Don't start if this channel is already running
@@ -203,7 +215,7 @@ void IrrigationController::checkSchedules() {
             }
 
             DEBUG_PRINTF("IrrigationController: Schedule %d triggered for channel %d\n", i, channel);
-            startIrrigation(channel, _schedules[i].durationMinutes);
+            startIrrigation(channel, _schedules[i].durationMinutes, false);  // scheduled = not manual
             // Note: Don't break - allow multiple channels to run simultaneously
         }
     }
@@ -241,7 +253,7 @@ bool IrrigationController::shouldRunSchedule(const IrrigationSchedule& schedule,
     return true;
 }
 
-void IrrigationController::activateValve(uint8_t channel, bool state) {
+void IrrigationController::activateValve(uint8_t channel, bool state, bool manual) {
     if (channel < 1 || channel > MAX_CHANNELS) {
         DEBUG_PRINTF("Invalid channel: %d\n", channel);
         return;
@@ -258,11 +270,18 @@ void IrrigationController::activateValve(uint8_t channel, bool state) {
         DEBUG_PRINTF("IrrigationController: Channel %d (GPIO %d) %s (inv:%d)\n",
                      channel, pin, state ? "ON" : "OFF", inverted);
     } else {
-        // Virtual (remote) channel — route through callback
+        // Virtual (remote) channel
+        if (!manual && state) {
+            // Scheduled start on virtual channel — slave handles it independently.
+            // Don't send CMD_START; the slave runs the schedule locally.
+            DEBUG_PRINTF("IrrigationController: Channel %d (remote) scheduled start — slave handles locally\n", channel);
+            return;
+        }
+        // Manual start/stop or any stop — route through callback
         if (_remoteValveCallback) {
             uint16_t duration = _status.channelDuration[idx];
             _remoteValveCallback(channel, state, duration);
-            DEBUG_PRINTF("IrrigationController: Channel %d (remote) %s\n",
+            DEBUG_PRINTF("IrrigationController: Channel %d (remote) %s (manual)\n",
                          channel, state ? "ON" : "OFF");
         } else {
             DEBUG_PRINTF("IrrigationController: Channel %d is virtual but no remote callback set\n", channel);
@@ -314,13 +333,15 @@ unsigned long IrrigationController::getTimeRemaining() const {
     return _currentDurationMinutes - elapsedMinutes;
 }
 
-unsigned long IrrigationController::getNextScheduledTime() const {
+unsigned long IrrigationController::getNextScheduledTime(uint8_t* nextChannel, uint8_t* nextIndex) const {
     if (!_hasValidTime) {
         return 0;
     }
 
     time_t now = _currentTime;
     time_t nextTime = 0;
+    uint8_t nextCh = 0;
+    uint8_t nextIdx = 0;
 
     for (int i = 0; i < MAX_SCHEDULES; i++) {
         if (!_schedules[i].enabled) {
@@ -360,12 +381,56 @@ unsigned long IrrigationController::getNextScheduledTime() const {
             continue; // No valid day found
         }
 
+        // Skip if this occurrence is before the skip-until time
+        if (_skipUntil[i] > 0 && scheduleTime <= _skipUntil[i]) {
+            continue;
+        }
+
         if (nextTime == 0 || scheduleTime < nextTime) {
             nextTime = scheduleTime;
+            nextCh = _schedules[i].channel;
+            nextIdx = (uint8_t)i;
         }
     }
 
+    if (nextChannel) {
+        *nextChannel = nextCh;
+    }
+    if (nextIndex) {
+        *nextIndex = nextIdx;
+    }
     return nextTime;
+}
+
+void IrrigationController::skipSchedule(uint8_t index) {
+    if (index >= MAX_SCHEDULES || !_schedules[index].enabled) return;
+
+    // Calculate the next occurrence time for this schedule
+    if (!_hasValidTime) return;
+    time_t now = _currentTime;
+    struct tm timeinfo;
+    localtime_r(&now, &timeinfo);
+    timeinfo.tm_hour = _schedules[index].hour;
+    timeinfo.tm_min = _schedules[index].minute;
+    timeinfo.tm_sec = 0;
+    time_t scheduleTime = mktime(&timeinfo);
+    if (scheduleTime <= now) scheduleTime += 86400;
+
+    // Skip until just past this occurrence
+    _skipUntil[index] = scheduleTime + 60;
+    DEBUG_PRINTF("IrrigationController: Skipping schedule %d (ch %d) next run\n",
+                 index, _schedules[index].channel);
+}
+
+void IrrigationController::unskipSchedule(uint8_t index) {
+    if (index >= MAX_SCHEDULES) return;
+    _skipUntil[index] = 0;
+    DEBUG_PRINTF("IrrigationController: Unskipped schedule %d\n", index);
+}
+
+bool IrrigationController::isScheduleSkipped(uint8_t index) const {
+    if (index >= MAX_SCHEDULES) return false;
+    return _skipUntil[index] > 0 && _currentTime <= _skipUntil[index];
 }
 
 int8_t IrrigationController::addSchedule(uint8_t channel, uint8_t hour, uint8_t minute,

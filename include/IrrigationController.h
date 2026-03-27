@@ -21,7 +21,7 @@ public:
     void update();
 
     // Manual control
-    void startIrrigation(uint8_t channel = 1, uint16_t durationMinutes = DEFAULT_DURATION_MINUTES);
+    void startIrrigation(uint8_t channel = 1, uint16_t durationMinutes = DEFAULT_DURATION_MINUTES, bool manual = true);
     void stopIrrigation(uint8_t channel = 0);  // 0 = stop all channels
     bool isIrrigating() const { return _status.irrigating; }
     bool isChannelIrrigating(uint8_t channel) const;
@@ -45,7 +45,10 @@ public:
     // Status
     SystemStatus getStatus() const { return _status; }
     unsigned long getTimeRemaining() const;
-    unsigned long getNextScheduledTime() const;
+    unsigned long getNextScheduledTime(uint8_t* nextChannel = nullptr, uint8_t* nextIndex = nullptr) const;
+    void skipSchedule(uint8_t index);    // Skip the next run of a specific schedule
+    void unskipSchedule(uint8_t index);  // Cancel a skip
+    bool isScheduleSkipped(uint8_t index) const;
     uint8_t getChannelPin(uint8_t channel) const;
 
     // Channel settings
@@ -71,7 +74,7 @@ private:
     void updateIrrigationState();
     void safetyCheck();
     bool shouldRunSchedule(const IrrigationSchedule& schedule, time_t currentTime);
-    void activateValve(uint8_t channel, bool state);
+    void activateValve(uint8_t channel, bool state, bool manual = true);
     int8_t findFreeScheduleSlot() const;
 
     // Member variables
@@ -84,6 +87,7 @@ private:
     uint16_t _currentDurationMinutes;
     RemoteValveCallback _remoteValveCallback = nullptr;
     bool _channelEnabled[MAX_CHANNELS];
+    time_t _skipUntil[MAX_SCHEDULES];  // RAM-only: skip schedule until this time
 };
 
 #endif // IRRIGATION_CONTROLLER_H

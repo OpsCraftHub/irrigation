@@ -411,7 +411,10 @@ void NodeManager::handleMessage(IPAddress senderIp, uint16_t senderPort,
     switch (msg.type) {
         case MSG_CMD_START:     handleCmdStart(senderIp, senderPort, msg); break;
         case MSG_CMD_STOP:      handleCmdStop(senderIp, senderPort, msg); break;
+        case MSG_CMD_SKIP:      handleCmdSkip(senderIp, senderPort, msg); break;
         case MSG_CMD_ACK:       handleCmdAck(msg); break;
+        case MSG_SCHEDULE_SET:  handleScheduleSet(senderIp, senderPort, msg); break;
+        case MSG_SCHEDULE_ACK:  handleScheduleAck(msg); break;
         case MSG_STATUS:        handleStatus(senderIp, msg); break;
         case MSG_HEARTBEAT:     handleHeartbeat(senderIp, senderPort, msg); break;
         case MSG_HEARTBEAT_ACK: handleHeartbeatAck(msg); break;
@@ -461,7 +464,9 @@ void NodeManager::handleCmdAck(const IrrigationMsg& msg) {
     if (_role != NODE_ROLE_MASTER) return;
 
     const char* typeStr = (msg.ack.acked_type == MSG_CMD_START) ? "START" :
-                          (msg.ack.acked_type == MSG_CMD_STOP)  ? "STOP" : "?";
+                          (msg.ack.acked_type == MSG_CMD_STOP)  ? "STOP" :
+                          (msg.ack.acked_type == MSG_CMD_SKIP)  ? "SKIP" :
+                          (msg.ack.acked_type == MSG_SCHEDULE_SET) ? "SCHED_SET" : "?";
     DEBUG_PRINTF("NodeManager: ACK for %s (seq=%d), result=%d\n",
                  typeStr, msg.ack.acked_seq, msg.ack.result);
 
@@ -522,6 +527,9 @@ void NodeManager::handleHeartbeat(IPAddress senderIp, uint16_t senderPort,
             DEBUG_PRINTF("NodeManager: Slave '%s' ONLINE (uptime=%lus, channels=%d, IP=%s)\n",
                          peer->node_id, (unsigned long)msg.heartbeat.uptime,
                          msg.heartbeat.num_channels, senderIp.toString().c_str());
+
+            // Push schedules to slave on reconnect
+            syncSchedulesForSlave(peer);
         }
 
         // Reply with HEARTBEAT_ACK containing current epoch time
@@ -684,6 +692,194 @@ void NodeManager::checkPeerTimeouts() {
             }
         }
     }
+}
+
+// ============================================================================
+// Schedule Sync: Master-side
+// ============================================================================
+
+void NodeManager::syncSchedulesForSlave(NodePeer* slave) {
+    if (!slave || !_controller) return;
+    if (!slave->online || slave->ip == IPAddress(0, 0, 0, 0)) {
+        DEBUG_PRINTF("NodeManager: Slave '%s' offline, deferring schedule sync\n",
+                     slave->node_id);
+        return;
+    }
+
+    IrrigationSchedule schedules[MAX_SCHEDULES];
+    uint8_t count = 0;
+    _controller->getSchedules(schedules, count);
+
+    uint8_t baseVch = slave->base_virtual_ch;
+    uint8_t numCh = slave->num_channels;
+    if (numCh == 0) numCh = 1;
+
+    // Collect matching schedules and assign slave-local indices
+    uint8_t slaveIdx = 0;
+    for (uint8_t i = 0; i < count && slaveIdx < MAX_SCHEDULES; i++) {
+        if (!schedules[i].enabled) continue;
+        uint8_t ch = schedules[i].channel;
+        if (ch < baseVch || ch >= baseVch + numCh) continue;
+
+        uint8_t localCh = ch - baseVch + 1;
+
+        IrrigationMsg msg = {};
+        fillHeader(msg, MSG_SCHEDULE_SET, slave->node_id, localCh);
+        msg.schedule.index = slaveIdx;
+        msg.schedule.enabled = 1;
+        msg.schedule.hour = schedules[i].hour;
+        msg.schedule.minute = schedules[i].minute;
+        msg.schedule.duration = schedules[i].durationMinutes;
+        msg.schedule.weekdays = schedules[i].weekdays;
+
+        DEBUG_PRINTF("NodeManager: Syncing schedule idx=%d ch=%d->local=%d %02d:%02d %dmin to '%s'\n",
+                     slaveIdx, ch, localCh, schedules[i].hour, schedules[i].minute,
+                     schedules[i].durationMinutes, slave->node_id);
+
+        sendUdp(slave->ip, slave->port, msg);
+        enqueueOutbox(msg, slave->ip, slave->port);
+        slaveIdx++;
+    }
+
+    // Clear remaining slave schedule slots (send enabled=false)
+    for (uint8_t i = slaveIdx; i < MAX_SCHEDULES; i++) {
+        IrrigationMsg msg = {};
+        fillHeader(msg, MSG_SCHEDULE_SET, slave->node_id, 0);
+        msg.schedule.index = i;
+        msg.schedule.enabled = 0;
+
+        sendUdp(slave->ip, slave->port, msg);
+        // No outbox for clears — best-effort is fine
+    }
+
+    DEBUG_PRINTF("NodeManager: Schedule sync complete for '%s': %d schedules pushed\n",
+                 slave->node_id, slaveIdx);
+}
+
+void NodeManager::sendScheduleSync(const char* slaveNodeId) {
+    if (_role != NODE_ROLE_MASTER) return;
+
+    NodePeer* slave = findSlaveByNodeId(slaveNodeId);
+    if (!slave) {
+        DEBUG_PRINTF("NodeManager: sendScheduleSync — slave '%s' not found\n", slaveNodeId);
+        return;
+    }
+    syncSchedulesForSlave(slave);
+}
+
+void NodeManager::sendSkipToSlave(uint8_t virtualChannel, uint8_t scheduleIndex) {
+    if (_role != NODE_ROLE_MASTER) return;
+
+    NodePeer* slave = findSlaveByVirtualCh(virtualChannel);
+    if (!slave) {
+        DEBUG_PRINTF("NodeManager: sendSkipToSlave — no slave for virtual ch %d\n", virtualChannel);
+        return;
+    }
+    if (!slave->online || slave->ip == IPAddress(0, 0, 0, 0)) {
+        DEBUG_PRINTF("NodeManager: Slave '%s' offline, cannot send skip\n", slave->node_id);
+        return;
+    }
+
+    // Remap master schedule index to slave-local index
+    // Walk master schedules for this slave's channel range to find the local index
+    IrrigationSchedule schedules[MAX_SCHEDULES];
+    uint8_t count = 0;
+    _controller->getSchedules(schedules, count);
+
+    uint8_t baseVch = slave->base_virtual_ch;
+    uint8_t numCh = slave->num_channels;
+    if (numCh == 0) numCh = 1;
+
+    uint8_t slaveLocalIdx = 0;
+    bool found = false;
+    for (uint8_t i = 0; i < count; i++) {
+        if (!schedules[i].enabled) continue;
+        uint8_t ch = schedules[i].channel;
+        if (ch < baseVch || ch >= baseVch + numCh) continue;
+        if (i == scheduleIndex) {
+            found = true;
+            break;
+        }
+        slaveLocalIdx++;
+    }
+
+    if (!found) {
+        DEBUG_PRINTF("NodeManager: sendSkipToSlave — schedule %d not mapped to slave '%s'\n",
+                     scheduleIndex, slave->node_id);
+        return;
+    }
+
+    IrrigationMsg msg = {};
+    fillHeader(msg, MSG_CMD_SKIP, slave->node_id, 0);
+    msg.schedule.index = slaveLocalIdx;  // Reuse schedule payload for skip index
+
+    DEBUG_PRINTF("NodeManager: Sending SKIP to '%s' slave_idx=%d (master_idx=%d)\n",
+                 slave->node_id, slaveLocalIdx, scheduleIndex);
+
+    sendUdp(slave->ip, slave->port, msg);
+    enqueueOutbox(msg, slave->ip, slave->port);
+}
+
+// ============================================================================
+// Schedule Sync: Slave-side handlers
+// ============================================================================
+
+void NodeManager::handleScheduleSet(IPAddress senderIp, uint16_t senderPort,
+                                    const IrrigationMsg& msg) {
+    if (_role != NODE_ROLE_SLAVE) return;
+    if (!_controller) return;
+
+    uint8_t index = msg.schedule.index;
+    uint8_t localCh = msg.channel;
+    bool enabled = msg.schedule.enabled != 0;
+
+    if (enabled) {
+        uint8_t hour = msg.schedule.hour;
+        uint8_t minute = msg.schedule.minute;
+        uint16_t duration = msg.schedule.duration;
+        uint8_t weekdays = msg.schedule.weekdays;
+
+        DEBUG_PRINTF("NodeManager: SCHEDULE_SET index=%d ch=%d %02d:%02d %dmin days=0x%02X\n",
+                     index, localCh, hour, minute, duration, weekdays);
+
+        // Use updateSchedule if slot exists, otherwise set it up
+        if (!_controller->updateSchedule(index, localCh, hour, minute, duration, weekdays)) {
+            // Slot wasn't enabled yet — enable it first then update
+            _controller->enableSchedule(index, true);
+            _controller->updateSchedule(index, localCh, hour, minute, duration, weekdays);
+        }
+    } else {
+        DEBUG_PRINTF("NodeManager: SCHEDULE_SET index=%d CLEAR\n", index);
+        _controller->removeSchedule(index);
+    }
+
+    // Persist to SPIFFS
+    _controller->saveSchedules();
+
+    // Send ACK
+    sendAck(senderIp, senderPort, MSG_SCHEDULE_SET, ACK_OK, msg.seq);
+}
+
+void NodeManager::handleScheduleAck(const IrrigationMsg& msg) {
+    if (_role != NODE_ROLE_MASTER) return;
+
+    DEBUG_PRINTF("NodeManager: SCHEDULE_ACK from '%s' (seq=%d)\n",
+                 msg.src_id, msg.ack.acked_seq);
+    removeFromOutbox(msg.ack.acked_seq);
+}
+
+void NodeManager::handleCmdSkip(IPAddress senderIp, uint16_t senderPort,
+                                const IrrigationMsg& msg) {
+    if (_role != NODE_ROLE_SLAVE) return;
+    if (!_controller) return;
+
+    uint8_t index = msg.schedule.index;
+    DEBUG_PRINTF("NodeManager: CMD_SKIP index=%d\n", index);
+
+    _controller->skipSchedule(index);
+
+    // Send ACK
+    sendAck(senderIp, senderPort, MSG_CMD_SKIP, ACK_OK, msg.seq);
 }
 
 // ============================================================================
