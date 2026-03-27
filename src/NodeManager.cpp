@@ -743,8 +743,11 @@ void NodeManager::syncSchedulesForSlave(NodePeer* slave) {
         slaveIdx++;
     }
 
-    // Clear remaining slave schedule slots (send enabled=false)
-    for (uint8_t i = slaveIdx; i < MAX_SCHEDULES; i++) {
+    // Clear a few slots past the last used (slave may have stale ones)
+    // No need to clear all 16 — just enough to cover previous sync state
+    uint8_t clearLimit = slaveIdx + 4;
+    if (clearLimit > MAX_SCHEDULES) clearLimit = MAX_SCHEDULES;
+    for (uint8_t i = slaveIdx; i < clearLimit; i++) {
         IrrigationMsg msg = {};
         fillHeader(msg, MSG_SCHEDULE_SET, slave->node_id, 0);
         msg.schedule.index = i;
@@ -886,19 +889,18 @@ void NodeManager::handleScheduleSet(IPAddress senderIp, uint16_t senderPort,
         DEBUG_PRINTF("NodeManager: SCHEDULE_SET index=%d ch=%d %02d:%02d %dmin days=0x%02X\n",
                      index, localCh, hour, minute, duration, weekdays);
 
-        // Use updateSchedule if slot exists, otherwise set it up
-        if (!_controller->updateSchedule(index, localCh, hour, minute, duration, weekdays)) {
-            // Slot wasn't enabled yet — enable it first then update
-            _controller->enableSchedule(index, true);
-            _controller->updateSchedule(index, localCh, hour, minute, duration, weekdays);
-        }
+        // Enable slot first if needed, then update — single save at the end
+        _controller->enableSchedule(index, true);
+        _controller->updateSchedule(index, localCh, hour, minute, duration, weekdays);
+        // updateSchedule() saves to SPIFFS
     } else {
-        DEBUG_PRINTF("NodeManager: SCHEDULE_SET index=%d CLEAR\n", index);
-        _controller->removeSchedule(index);
+        // Only remove if the slot is actually in use (avoid pointless SPIFFS writes)
+        IrrigationSchedule existing = _controller->getSchedule(index);
+        if (existing.enabled) {
+            DEBUG_PRINTF("NodeManager: SCHEDULE_SET index=%d CLEAR\n", index);
+            _controller->removeSchedule(index);
+        }
     }
-
-    // Persist to SPIFFS
-    _controller->saveSchedules();
 
     // Send ACK
     sendAck(senderIp, senderPort, MSG_SCHEDULE_SET, ACK_OK, msg.seq);
