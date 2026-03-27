@@ -838,10 +838,49 @@ bool WiFiManager::downloadFirmware(const String& url) {
         return false;
     }
 
-    // Use writeStream for efficient memory usage — handles buffering internally
+    // Chunked download with progress reporting
     WiFiClient* stream = http.getStreamPtr();
     DEBUG_PRINTF("WiFiManager: Starting firmware write, size: %d bytes\n", contentLength);
-    size_t written = Update.writeStream(*stream);
+
+    uint8_t buf[1024];
+    size_t written = 0;
+    int lastPct = -1;
+    unsigned long lastProgressLog = 0;
+
+    while (written < (size_t)contentLength) {
+        size_t available = stream->available();
+        if (available == 0) {
+            // Wait for data with timeout
+            unsigned long waitStart = millis();
+            while (!stream->available() && (millis() - waitStart < 10000)) {
+                delay(10);
+            }
+            if (!stream->available()) {
+                DEBUG_PRINTLN("WiFiManager: Download stalled — timeout");
+                break;
+            }
+            continue;
+        }
+
+        size_t toRead = (available > sizeof(buf)) ? sizeof(buf) : available;
+        size_t bytesRead = stream->readBytes(buf, toRead);
+        if (bytesRead == 0) break;
+
+        size_t bytesWritten = Update.write(buf, bytesRead);
+        if (bytesWritten != bytesRead) {
+            DEBUG_PRINTF("WiFiManager: Write mismatch: read=%d written=%d\n", bytesRead, bytesWritten);
+            break;
+        }
+        written += bytesWritten;
+
+        int pct = (int)((written * 100) / contentLength);
+        if (pct != lastPct && (pct % 5 == 0 || millis() - lastProgressLog > 3000)) {
+            DEBUG_PRINTF("WiFiManager: OTA progress: %d%% (%d / %d bytes)\n", pct, written, contentLength);
+            lastPct = pct;
+            lastProgressLog = millis();
+        }
+    }
+
     DEBUG_PRINTF("WiFiManager: Written %d of %d bytes\n", written, contentLength);
 
     if (Update.end()) {
