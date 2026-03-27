@@ -15,8 +15,8 @@
 #define MSG_SCHEDULE_REQ    0x12  // future
 #define MSG_CMD_START       0x20
 #define MSG_CMD_STOP        0x21
-#define MSG_CMD_SKIP        0x22  // future
-#define MSG_CMD_EXTRA       0x23  // future
+#define MSG_CMD_SKIP        0x22
+#define MSG_CMD_UNSKIP      0x23
 #define MSG_CMD_ACK         0x2F
 #define MSG_STATUS          0x30
 #define MSG_PAIR_REQUEST    0x40

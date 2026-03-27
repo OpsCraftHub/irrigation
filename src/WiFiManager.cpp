@@ -2430,6 +2430,15 @@ void WiFiManager::startWebServer() {
             return;
         }
         _controller->unskipSchedule(id);
+
+        // Forward unskip to slave if schedule is for a virtual channel
+        if (_nodeManager) {
+            IrrigationSchedule sched = _controller->getSchedule(id);
+            if (sched.channel > NUM_LOCAL_CHANNELS) {
+                _nodeManager->sendUnskipToSlave(sched.channel, id);
+            }
+        }
+
         _webServer->send(200, "application/json", "{\"success\":true,\"message\":\"Schedule unskipped\"}");
     });
 

@@ -412,6 +412,7 @@ void NodeManager::handleMessage(IPAddress senderIp, uint16_t senderPort,
         case MSG_CMD_START:     handleCmdStart(senderIp, senderPort, msg); break;
         case MSG_CMD_STOP:      handleCmdStop(senderIp, senderPort, msg); break;
         case MSG_CMD_SKIP:      handleCmdSkip(senderIp, senderPort, msg); break;
+        case MSG_CMD_UNSKIP:    handleCmdUnskip(senderIp, senderPort, msg); break;
         case MSG_CMD_ACK:       handleCmdAck(msg); break;
         case MSG_SCHEDULE_SET:  handleScheduleSet(senderIp, senderPort, msg); break;
         case MSG_SCHEDULE_ACK:  handleScheduleAck(msg); break;
@@ -466,6 +467,7 @@ void NodeManager::handleCmdAck(const IrrigationMsg& msg) {
     const char* typeStr = (msg.ack.acked_type == MSG_CMD_START) ? "START" :
                           (msg.ack.acked_type == MSG_CMD_STOP)  ? "STOP" :
                           (msg.ack.acked_type == MSG_CMD_SKIP)  ? "SKIP" :
+                          (msg.ack.acked_type == MSG_CMD_UNSKIP) ? "UNSKIP" :
                           (msg.ack.acked_type == MSG_SCHEDULE_SET) ? "SCHED_SET" : "?";
     DEBUG_PRINTF("NodeManager: ACK for %s (seq=%d), result=%d\n",
                  typeStr, msg.ack.acked_seq, msg.ack.result);
@@ -820,6 +822,48 @@ void NodeManager::sendSkipToSlave(uint8_t virtualChannel, uint8_t scheduleIndex)
     enqueueOutbox(msg, slave->ip, slave->port);
 }
 
+void NodeManager::sendUnskipToSlave(uint8_t virtualChannel, uint8_t scheduleIndex) {
+    if (_role != NODE_ROLE_MASTER) return;
+    if (!_controller) return;
+
+    NodePeer* slave = findSlaveByVirtualCh(virtualChannel);
+    if (!slave) return;
+    if (!slave->online || slave->ip == IPAddress(0, 0, 0, 0)) return;
+
+    // Same index remapping as sendSkipToSlave
+    IrrigationSchedule schedules[MAX_SCHEDULES];
+    uint8_t count = 0;
+    _controller->getSchedules(schedules, count);
+
+    uint8_t baseVch = slave->base_virtual_ch;
+    uint8_t numCh = slave->num_channels;
+    if (numCh == 0) numCh = 1;
+
+    uint8_t slaveLocalIdx = 0;
+    bool found = false;
+    for (uint8_t i = 0; i < count; i++) {
+        if (!schedules[i].enabled) continue;
+        uint8_t ch = schedules[i].channel;
+        if (ch < baseVch || ch >= baseVch + numCh) continue;
+        if (i == scheduleIndex) {
+            found = true;
+            break;
+        }
+        slaveLocalIdx++;
+    }
+    if (!found) return;
+
+    IrrigationMsg msg = {};
+    fillHeader(msg, MSG_CMD_UNSKIP, slave->node_id, 0);
+    msg.schedule.index = slaveLocalIdx;
+
+    DEBUG_PRINTF("NodeManager: Sending UNSKIP to '%s' slave_idx=%d (master_idx=%d)\n",
+                 slave->node_id, slaveLocalIdx, scheduleIndex);
+
+    sendUdp(slave->ip, slave->port, msg);
+    enqueueOutbox(msg, slave->ip, slave->port);
+}
+
 // ============================================================================
 // Schedule Sync: Slave-side handlers
 // ============================================================================
@@ -880,6 +924,20 @@ void NodeManager::handleCmdSkip(IPAddress senderIp, uint16_t senderPort,
 
     // Send ACK
     sendAck(senderIp, senderPort, MSG_CMD_SKIP, ACK_OK, msg.seq);
+}
+
+void NodeManager::handleCmdUnskip(IPAddress senderIp, uint16_t senderPort,
+                                  const IrrigationMsg& msg) {
+    if (_role != NODE_ROLE_SLAVE) return;
+    if (!_controller) return;
+
+    uint8_t index = msg.schedule.index;
+    DEBUG_PRINTF("NodeManager: CMD_UNSKIP index=%d\n", index);
+
+    _controller->unskipSchedule(index);
+
+    // Send ACK
+    sendAck(senderIp, senderPort, MSG_CMD_UNSKIP, ACK_OK, msg.seq);
 }
 
 // ============================================================================

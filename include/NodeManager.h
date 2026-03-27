@@ -85,6 +85,7 @@ public:
     // Master: schedule sync — push schedules to slave
     void sendScheduleSync(const char* slaveNodeId);
     void sendSkipToSlave(uint8_t virtualChannel, uint8_t scheduleIndex);
+    void sendUnskipToSlave(uint8_t virtualChannel, uint8_t scheduleIndex);
 
     // Slave peer info (for master)
     const NodePeer* getSlave(uint8_t index) const;
@@ -142,6 +143,8 @@ private:
     void handleScheduleAck(const IrrigationMsg& msg);
     void handleCmdSkip(IPAddress senderIp, uint16_t senderPort,
                        const IrrigationMsg& msg);
+    void handleCmdUnskip(IPAddress senderIp, uint16_t senderPort,
+                         const IrrigationMsg& msg);
     void syncSchedulesForSlave(NodePeer* slave);
 
     // Pairing handlers
