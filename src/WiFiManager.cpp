@@ -2327,6 +2327,11 @@ void WiFiManager::startWebServer() {
                         }
                     }
                 }
+                // Notify HA of schedule change
+                if (_homeAssistant) {
+                    _homeAssistant->publishSchedule();
+                    _homeAssistant->publishStatus();
+                }
                 _webServer->send(200, "application/json", "{\"success\":true,\"message\":\"Schedule updated\"}");
             } else {
                 _webServer->send(500, "application/json", "{\"success\":false,\"message\":\"Unable to update schedule\"}");
@@ -2345,6 +2350,11 @@ void WiFiManager::startWebServer() {
                             break;
                         }
                     }
+                }
+                // Notify HA of schedule change
+                if (_homeAssistant) {
+                    _homeAssistant->publishSchedule();
+                    _homeAssistant->publishStatus();
                 }
                 _webServer->send(200, "application/json", "{\"success\":true,\"message\":\"Schedule saved\",\"index\":" + String(index) + "}");
             } else {
@@ -2381,6 +2391,11 @@ void WiFiManager::startWebServer() {
                         break;
                     }
                 }
+            }
+            // Notify HA of schedule change
+            if (_homeAssistant) {
+                _homeAssistant->publishSchedule();
+                _homeAssistant->publishStatus();
             }
             _webServer->send(200, "application/json", "{\"success\":true,\"message\":\"Schedule removed\"}");
         } else {
@@ -2527,6 +2542,12 @@ void WiFiManager::startWebServer() {
             }
         }
 
+        // Notify HA of schedule change
+        if (_homeAssistant) {
+            _homeAssistant->publishSchedule();
+            _homeAssistant->publishStatus();
+        }
+
         _webServer->send(200, "application/json", "{\"success\":true,\"message\":\"Schedule skipped\"}");
     });
 
@@ -2554,6 +2575,12 @@ void WiFiManager::startWebServer() {
             if (sched.channel > NUM_LOCAL_CHANNELS) {
                 _nodeManager->sendUnskipToSlave(sched.channel, id);
             }
+        }
+
+        // Notify HA of schedule change
+        if (_homeAssistant) {
+            _homeAssistant->publishSchedule();
+            _homeAssistant->publishStatus();
         }
 
         _webServer->send(200, "application/json", "{\"success\":true,\"message\":\"Schedule unskipped\"}");
@@ -2587,6 +2614,12 @@ void WiFiManager::startWebServer() {
 
         _controller->startIrrigation(channel, duration);
         DEBUG_PRINTF("WiFiManager: Manual start channel %d for %d min\n", channel, duration);
+        // Notify HA of state change
+        if (_homeAssistant) {
+            _homeAssistant->publishChannelStates();
+            _homeAssistant->publishIndividualStatus();
+            _homeAssistant->publishState();
+        }
         _webServer->send(200, "application/json", "{\"success\":true,\"message\":\"Channel started\"}");
     });
 
@@ -2618,6 +2651,12 @@ void WiFiManager::startWebServer() {
 
         _controller->stopIrrigation(channel);
         DEBUG_PRINTF("WiFiManager: Manual stop channel %d\n", channel);
+        // Notify HA of state change
+        if (_homeAssistant) {
+            _homeAssistant->publishChannelStates();
+            _homeAssistant->publishIndividualStatus();
+            _homeAssistant->publishState();
+        }
         _webServer->send(200, "application/json", "{\"success\":true,\"message\":\"Channel stopped\"}");
     });
 
