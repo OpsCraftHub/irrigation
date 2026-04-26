@@ -1553,8 +1553,10 @@ String WiFiManager::getStatusPage() {
                     const slave = slaveNodes[ch.channel];
                     const name = (slave && slave.name) ? slave.name : (ch.slave || 'Remote');
                     const online = slave ? slave.online : false;
+                    const nid = ch.node_id || '';
                     pinLabel = `<span class="pin">${name}</span>`;
-                    onlineFlag = `<button class="invert-btn${online ? ' active' : ''}" style="font-size:9px;padding:1px 4px;" disabled>${online ? 'ON' : 'OFF'}</button>`;
+                    onlineFlag = `<button class="invert-btn${online ? ' active' : ''}" style="font-size:9px;padding:1px 4px;" disabled>${online ? 'ON' : 'OFF'}</button>`
+                        + (nid ? `<button class="invert-btn" style="font-size:9px;padding:1px 4px;color:#fc8181;" onclick="unpairSlave('${nid}')">UNPAIR</button>` : '');
                 } else {
                     pinLabel = `<span class="pin">GPIO ${ch.pin}</span>`;
                 }
@@ -2225,6 +2227,7 @@ void WiFiManager::startWebServer() {
                     channel["pin"] = 0;
                     channel["remote"] = true;
                     channel["slave"] = slave->name[0] ? slave->name : slave->node_id;
+                    channel["node_id"] = slave->node_id;
                 }
             }
         }

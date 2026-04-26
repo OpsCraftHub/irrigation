@@ -1,10 +1,12 @@
 #include "HomeAssistantIntegration.h"
+#include "NodeManager.h"
 
 // Static instance pointer for callback
 HomeAssistantIntegration* HomeAssistantIntegration::_instance = nullptr;
 
 HomeAssistantIntegration::HomeAssistantIntegration(IrrigationController* controller)
     : _controller(controller),
+      _nodeManager(nullptr),
       _wifiClient(nullptr),
       _mqttClient(nullptr),
       _port(MQTT_PORT),
@@ -188,6 +190,10 @@ void HomeAssistantIntegration::connectMQTT() {
     }
 }
 
+void HomeAssistantIntegration::setNodeManager(NodeManager* nm) {
+    _nodeManager = nm;
+}
+
 void HomeAssistantIntegration::subscribe() {
     // Subscribe to command topics
     String commandTopic = buildTopic("command");
@@ -197,6 +203,14 @@ void HomeAssistantIntegration::subscribe() {
     String durationTopic = buildTopic("duration/set");
     _mqttClient->subscribe(durationTopic.c_str());
     DEBUG_PRINTF("HomeAssistant: Subscribed to %s\n", durationTopic.c_str());
+
+    String skipTopic = buildTopic("schedule/skip");
+    _mqttClient->subscribe(skipTopic.c_str());
+    DEBUG_PRINTF("HomeAssistant: Subscribed to %s\n", skipTopic.c_str());
+
+    String unskipTopic = buildTopic("schedule/unskip");
+    _mqttClient->subscribe(unskipTopic.c_str());
+    DEBUG_PRINTF("HomeAssistant: Subscribed to %s\n", unskipTopic.c_str());
 }
 
 void HomeAssistantIntegration::update() {
@@ -273,6 +287,16 @@ void HomeAssistantIntegration::publishStatus() {
         doc["last_error"] = status.lastError;
     }
 
+    // Build skipped_schedules summary
+    String skippedStr;
+    for (uint8_t i = 0; i < MAX_SCHEDULES; i++) {
+        if (_controller->isScheduleSkipped(i)) {
+            if (skippedStr.length() > 0) skippedStr += ",";
+            skippedStr += String(i);
+        }
+    }
+    doc["skipped_schedules"] = skippedStr.length() > 0 ? skippedStr : "none";
+
     String jsonString;
     serializeJson(doc, jsonString);
 
@@ -300,6 +324,7 @@ void HomeAssistantIntegration::publishSchedule() {
             schedule["minute"] = schedules[i].minute;
             schedule["duration"] = schedules[i].durationMinutes;
             schedule["weekdays"] = schedules[i].weekdays;
+            schedule["skipped"] = _controller->isScheduleSkipped(i);
         }
     }
 
@@ -441,6 +466,78 @@ void HomeAssistantIntegration::handleMQTTMessage(char* topic, byte* payload, uns
             // Duration will be used for next irrigation cycle
             // You might want to store this in a class variable or preferences
         }
+    }
+    // Handle schedule skip
+    else if (topicStr.endsWith("/schedule/skip")) {
+        StaticJsonDocument<128> doc;
+        DeserializationError err = deserializeJson(doc, message);
+        if (err) {
+            DEBUG_PRINTF("HomeAssistant: Failed to parse skip payload: %s\n", err.c_str());
+            return;
+        }
+
+        if (doc["index"].is<const char*>() && String(doc["index"].as<const char*>()) == "all") {
+            DEBUG_PRINTLN("HomeAssistant: Skipping all schedules via MQTT");
+            for (uint8_t i = 0; i < MAX_SCHEDULES; i++) {
+                _controller->skipSchedule(i);
+                if (_nodeManager) {
+                    IrrigationSchedule sched = _controller->getSchedule(i);
+                    if (sched.channel > NUM_LOCAL_CHANNELS) {
+                        _nodeManager->sendSkipToSlave(sched.channel, i);
+                    }
+                }
+            }
+        } else {
+            uint8_t idx = doc["index"] | 255;
+            if (idx < MAX_SCHEDULES) {
+                DEBUG_PRINTF("HomeAssistant: Skipping schedule %d via MQTT\n", idx);
+                _controller->skipSchedule(idx);
+                if (_nodeManager) {
+                    IrrigationSchedule sched = _controller->getSchedule(idx);
+                    if (sched.channel > NUM_LOCAL_CHANNELS) {
+                        _nodeManager->sendSkipToSlave(sched.channel, idx);
+                    }
+                }
+            }
+        }
+        publishSchedule();
+        publishStatus();
+    }
+    // Handle schedule unskip
+    else if (topicStr.endsWith("/schedule/unskip")) {
+        StaticJsonDocument<128> doc;
+        DeserializationError err = deserializeJson(doc, message);
+        if (err) {
+            DEBUG_PRINTF("HomeAssistant: Failed to parse unskip payload: %s\n", err.c_str());
+            return;
+        }
+
+        if (doc["index"].is<const char*>() && String(doc["index"].as<const char*>()) == "all") {
+            DEBUG_PRINTLN("HomeAssistant: Unskipping all schedules via MQTT");
+            for (uint8_t i = 0; i < MAX_SCHEDULES; i++) {
+                _controller->unskipSchedule(i);
+                if (_nodeManager) {
+                    IrrigationSchedule sched = _controller->getSchedule(i);
+                    if (sched.channel > NUM_LOCAL_CHANNELS) {
+                        _nodeManager->sendUnskipToSlave(sched.channel, i);
+                    }
+                }
+            }
+        } else {
+            uint8_t idx = doc["index"] | 255;
+            if (idx < MAX_SCHEDULES) {
+                DEBUG_PRINTF("HomeAssistant: Unskipping schedule %d via MQTT\n", idx);
+                _controller->unskipSchedule(idx);
+                if (_nodeManager) {
+                    IrrigationSchedule sched = _controller->getSchedule(idx);
+                    if (sched.channel > NUM_LOCAL_CHANNELS) {
+                        _nodeManager->sendUnskipToSlave(sched.channel, idx);
+                    }
+                }
+            }
+        }
+        publishSchedule();
+        publishStatus();
     }
 }
 

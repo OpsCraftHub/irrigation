@@ -174,6 +174,9 @@ void setup() {
                 irrigationController->setRemoteValveCallback(remoteValveHandler);
                 nodeManager->setPairRequestCallback(onPairRequest);
                 wifiManager->setNodeManager(nodeManager);
+                if (features.mqtt && homeAssistant) {
+                    homeAssistant->setNodeManager(nodeManager);
+                }
 #if LCD_ROWS > 0
                 if (displayManager) {
                     displayManager->setPairResponseCallback(onPairResponse);

@@ -9,6 +9,8 @@
 #include "Config.h"
 #include "IrrigationController.h"
 
+class NodeManager;
+
 class HomeAssistantIntegration {
 public:
     HomeAssistantIntegration(IrrigationController* controller);
@@ -42,6 +44,9 @@ public:
     // Home Assistant Discovery
     void publishDiscovery();
 
+    // NodeManager integration (for slave forwarding)
+    void setNodeManager(NodeManager* nm);
+
 private:
     // Internal methods
     void connectMQTT();
@@ -55,6 +60,7 @@ private:
 
     // Member variables
     IrrigationController* _controller;
+    NodeManager* _nodeManager;
     WiFiClient* _wifiClient;
     PubSubClient* _mqttClient;
     String _broker;
