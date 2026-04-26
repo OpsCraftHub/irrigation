@@ -370,7 +370,7 @@ void HomeAssistantIntegration::publishDiscovery() {
         identifiers.add(HA_DEVICE_ID);
         device["name"] = HA_DEVICE_NAME;
         device["model"] = "ESP32 Irrigation Controller";
-        device["manufacturer"] = "DIY";
+        device["manufacturer"] = "OpsCraft";
         device["sw_version"] = VERSION;
 
         String jsonString;
