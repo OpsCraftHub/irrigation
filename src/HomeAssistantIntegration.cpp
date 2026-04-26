@@ -211,6 +211,14 @@ void HomeAssistantIntegration::subscribe() {
     String unskipTopic = buildTopic("schedule/unskip");
     _mqttClient->subscribe(unskipTopic.c_str());
     DEBUG_PRINTF("HomeAssistant: Subscribed to %s\n", unskipTopic.c_str());
+
+    String setTopic = buildTopic("schedule/set");
+    _mqttClient->subscribe(setTopic.c_str());
+    DEBUG_PRINTF("HomeAssistant: Subscribed to %s\n", setTopic.c_str());
+
+    String deleteTopic = buildTopic("schedule/delete");
+    _mqttClient->subscribe(deleteTopic.c_str());
+    DEBUG_PRINTF("HomeAssistant: Subscribed to %s\n", deleteTopic.c_str());
 }
 
 void HomeAssistantIntegration::update() {
@@ -536,6 +544,101 @@ void HomeAssistantIntegration::handleMQTTMessage(char* topic, byte* payload, uns
                 }
             }
         }
+        publishSchedule();
+        publishStatus();
+    }
+    // Handle schedule set (create or update)
+    else if (topicStr.endsWith("/schedule/set")) {
+        StaticJsonDocument<256> doc;
+        DeserializationError err = deserializeJson(doc, message);
+        if (err) {
+            DEBUG_PRINTF("HomeAssistant: Failed to parse schedule/set payload: %s\n", err.c_str());
+            return;
+        }
+
+        uint8_t channel = doc["channel"] | 1;
+        uint8_t hour = doc["hour"] | 0;
+        uint8_t minute = doc["minute"] | 0;
+        uint16_t duration = doc["duration"] | DEFAULT_DURATION_MINUTES;
+        uint8_t weekdays = doc["weekdays"] | 0x7F;
+        int16_t editIndex = doc["index"] | -1;
+
+        if (channel < 1 || channel > MAX_CHANNELS) {
+            DEBUG_PRINTLN("HomeAssistant: schedule/set invalid channel");
+            return;
+        }
+        if (hour > 23 || minute > 59) {
+            DEBUG_PRINTLN("HomeAssistant: schedule/set invalid time");
+            return;
+        }
+        if (duration < MIN_DURATION_MINUTES || duration > MAX_DURATION_MINUTES) {
+            DEBUG_PRINTLN("HomeAssistant: schedule/set invalid duration");
+            return;
+        }
+
+        bool ok = false;
+        if (editIndex >= 0) {
+            ok = _controller->updateSchedule((uint8_t)editIndex, channel, hour, minute, duration, weekdays);
+            DEBUG_PRINTF("HomeAssistant: Updated schedule %d via MQTT: ch%d %02d:%02d %dmin -> %s\n",
+                         editIndex, channel, hour, minute, duration, ok ? "OK" : "FAIL");
+        } else {
+            int8_t newIdx = _controller->addSchedule(channel, hour, minute, duration, weekdays);
+            ok = (newIdx >= 0);
+            DEBUG_PRINTF("HomeAssistant: Added schedule via MQTT: ch%d %02d:%02d %dmin -> idx %d\n",
+                         channel, hour, minute, duration, newIdx);
+        }
+
+        // Sync to slave if virtual channel
+        if (ok && _nodeManager && channel > NUM_LOCAL_CHANNELS) {
+            for (uint8_t s = 0; s < _nodeManager->getSlaveCount(); s++) {
+                const NodePeer* slave = _nodeManager->getSlave(s);
+                if (slave && channel >= slave->base_virtual_ch &&
+                    channel < slave->base_virtual_ch + slave->num_channels) {
+                    _nodeManager->sendScheduleSync(slave->node_id);
+                    break;
+                }
+            }
+        }
+
+        publishSchedule();
+        publishStatus();
+    }
+    // Handle schedule delete
+    else if (topicStr.endsWith("/schedule/delete")) {
+        StaticJsonDocument<128> doc;
+        DeserializationError err = deserializeJson(doc, message);
+        if (err) {
+            DEBUG_PRINTF("HomeAssistant: Failed to parse schedule/delete payload: %s\n", err.c_str());
+            return;
+        }
+
+        uint8_t idx = doc["index"] | 255;
+        if (idx >= MAX_SCHEDULES) {
+            DEBUG_PRINTLN("HomeAssistant: schedule/delete invalid index");
+            return;
+        }
+
+        // Grab channel before deleting so we can sync slave
+        IrrigationSchedule sched = _controller->getSchedule(idx);
+        uint8_t schedCh = sched.channel;
+
+        if (_controller->removeSchedule(idx)) {
+            DEBUG_PRINTF("HomeAssistant: Deleted schedule %d via MQTT\n", idx);
+
+            if (_nodeManager && schedCh > NUM_LOCAL_CHANNELS) {
+                for (uint8_t s = 0; s < _nodeManager->getSlaveCount(); s++) {
+                    const NodePeer* slave = _nodeManager->getSlave(s);
+                    if (slave && schedCh >= slave->base_virtual_ch &&
+                        schedCh < slave->base_virtual_ch + slave->num_channels) {
+                        _nodeManager->sendScheduleSync(slave->node_id);
+                        break;
+                    }
+                }
+            }
+        } else {
+            DEBUG_PRINTF("HomeAssistant: Failed to delete schedule %d\n", idx);
+        }
+
         publishSchedule();
         publishStatus();
     }
