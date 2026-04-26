@@ -80,6 +80,7 @@ private:
     String weekdaysToDaysArray(uint8_t weekdays);
     void publishModeState();
     unsigned long getChannelTimeRemaining(uint8_t channel);
+    bool isChannelActive(uint8_t channel);
 
     // Static callback wrapper
     static void mqttCallback(char* topic, byte* payload, unsigned int length);

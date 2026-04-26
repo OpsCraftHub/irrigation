@@ -245,7 +245,7 @@ void HomeAssistantIntegration::subscribe() {
 
     // Per-channel topics
     for (uint8_t ch = 1; ch <= MAX_CHANNELS; ch++) {
-        if (_controller->isChannelEnabled(ch)) {
+        if (isChannelActive(ch)) {
             String chCmd = buildTopic(("channel/" + String(ch) + "/command").c_str());
             _mqttClient->subscribe(chCmd.c_str());
             String chDur = buildTopic(("channel/" + String(ch) + "/duration/set").c_str());
@@ -327,7 +327,7 @@ void HomeAssistantIntegration::update() {
         // Publish per-channel availability for virtual channels
         if (_nodeManager) {
             for (uint8_t ch = 1; ch <= MAX_CHANNELS; ch++) {
-                if (!_controller->isChannelEnabled(ch)) continue;
+                if (!isChannelActive(ch)) continue;
                 uint8_t idx = ch - 1;
                 if (idx >= NUM_LOCAL_CHANNELS) {
                     // Virtual channel — derive availability from slave online status
@@ -429,7 +429,7 @@ void HomeAssistantIntegration::publishDiscovery() {
 
     // === 5. Per-channel entities ===
     for (uint8_t ch = 1; ch <= MAX_CHANNELS; ch++) {
-        if (_controller->isChannelEnabled(ch)) {
+        if (isChannelActive(ch)) {
             publishChannelSwitchDiscovery(ch);
             delay(50);
             publishChannelDurationDiscovery(ch);
@@ -670,7 +670,7 @@ void HomeAssistantIntegration::refreshDiscovery() {
 
 void HomeAssistantIntegration::removeStaleDiscovery() {
     for (uint8_t ch = 1; ch <= MAX_CHANNELS; ch++) {
-        if (_discoveredChannels[ch - 1] && !_controller->isChannelEnabled(ch)) {
+        if (_discoveredChannels[ch - 1] && !isChannelActive(ch)) {
             String chId = String(HA_DEVICE_ID) + "_ch" + String(ch);
             // Publish empty retained payload to remove from HA
             String switchTopic = String(HA_DISCOVERY_PREFIX) + "/switch/" + chId + "/config";
@@ -1140,7 +1140,7 @@ void HomeAssistantIntegration::publishChannelStates() {
     if (!isConnected()) return;
 
     for (uint8_t ch = 1; ch <= MAX_CHANNELS; ch++) {
-        if (!_controller->isChannelEnabled(ch)) continue;
+        if (!isChannelActive(ch)) continue;
 
         String chBase = "channel/" + String(ch);
         uint8_t idx = ch - 1;
@@ -1256,4 +1256,26 @@ unsigned long HomeAssistantIntegration::getChannelTimeRemaining(uint8_t channel)
 
     if (elapsedMs >= durationMs) return 0;
     return (durationMs - elapsedMs) / 1000;  // Return seconds
+}
+
+bool HomeAssistantIntegration::isChannelActive(uint8_t channel) {
+    if (channel < 1 || channel > MAX_CHANNELS) return false;
+    uint8_t idx = channel - 1;
+
+    // Local channels: use the explicit enabled flag
+    if (idx < NUM_LOCAL_CHANNELS) {
+        return _controller->isChannelEnabled(channel);
+    }
+
+    // Virtual channels: active if a paired slave owns this channel
+    if (_nodeManager) {
+        for (uint8_t s = 0; s < _nodeManager->getSlaveCount(); s++) {
+            const NodePeer* slave = _nodeManager->getSlave(s);
+            if (slave && channel >= slave->base_virtual_ch &&
+                channel < slave->base_virtual_ch + slave->num_channels) {
+                return true;
+            }
+        }
+    }
+    return false;
 }
