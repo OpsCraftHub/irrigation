@@ -97,8 +97,11 @@ jobs:
       - name: Check for changes and commit everything together
         id: check_changes
         run: |
-          # Stage all changes
-          git add include/Config.h firmware/board_a/ firmware/board_b_c3/ firmware/firmware.bin firmware/version.txt
+          # Stage all changes (-f to override .gitignore for firmware binaries)
+          git add include/Config.h
+          git add -f firmware/board_a/firmware.bin firmware/board_a/version.txt
+          git add -f firmware/board_b_c3/firmware.bin firmware/board_b_c3/version.txt
+          git add -f firmware/firmware.bin firmware/version.txt
 
           if git diff --staged --quiet; then
             echo "changed=false" >> $GITHUB_OUTPUT
