@@ -6,7 +6,8 @@ IrrigationController::IrrigationController()
       _hasValidTime(false),
       _lastScheduleCheck(0),
       _irrigationStartMillis(0),
-      _currentDurationMinutes(0) {
+      _currentDurationMinutes(0),
+      _systemEnabled(true) {
 
     // Initialize status
     memset(&_status, 0, sizeof(SystemStatus));
@@ -79,7 +80,7 @@ void IrrigationController::update() {
     // Check schedules periodically
     if (currentMillis - _lastScheduleCheck >= SCHEDULE_CHECK_INTERVAL) {
         _lastScheduleCheck = currentMillis;
-        if (_hasValidTime && !_status.manualMode) {
+        if (_hasValidTime && !_status.manualMode && _systemEnabled) {
             checkSchedules();
         }
     }
@@ -716,6 +717,14 @@ bool IrrigationController::loadChannelSettings() {
 
     DEBUG_PRINTLN("IrrigationController: Channel settings loaded");
     return true;
+}
+
+void IrrigationController::setSystemEnabled(bool enabled) {
+    _systemEnabled = enabled;
+    DEBUG_PRINTF("IrrigationController: System %s\n", enabled ? "enabled" : "disabled");
+    if (!enabled) {
+        stopIrrigation(0);  // Stop all channels
+    }
 }
 
 void IrrigationController::setRemoteChannelStatus(uint8_t channel, bool irrigating, uint16_t remainingSec) {

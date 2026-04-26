@@ -334,6 +334,9 @@ void onPairResponse(bool accepted) {
         // Push all relevant schedules to the newly paired slave
         nodeManager->sendScheduleSync(newSlaveId);
 
+        // Refresh HA discovery to add new channel entities
+        if (homeAssistant) homeAssistant->refreshDiscovery();
+
 #if LCD_ROWS > 0
         if (displayManager) {
             displayManager->clearPairRequest();

@@ -2748,6 +2748,8 @@ void WiFiManager::startWebServer() {
         }
 
         if (_nodeManager->unpairSlave(nodeId)) {
+            // Refresh HA discovery to remove stale channel entities
+            if (_homeAssistant) _homeAssistant->refreshDiscovery();
             _webServer->send(200, "application/json", "{\"success\":true,\"message\":\"Slave unpaired\"}");
         } else {
             _webServer->send(404, "application/json", "{\"success\":false,\"message\":\"Slave not found\"}");

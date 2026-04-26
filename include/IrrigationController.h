@@ -26,6 +26,9 @@ public:
     bool isIrrigating() const { return _status.irrigating; }
     bool isChannelIrrigating(uint8_t channel) const;
     bool isManualMode() const { return _status.manualMode; }
+    void setManualMode(bool manual) { _status.manualMode = manual; }
+    void setSystemEnabled(bool enabled);
+    bool isSystemEnabled() const { return _systemEnabled; }
 
     // Schedule management - CRUD operations
     int8_t addSchedule(uint8_t channel, uint8_t hour, uint8_t minute,
@@ -87,6 +90,7 @@ private:
     uint16_t _currentDurationMinutes;
     RemoteValveCallback _remoteValveCallback = nullptr;
     bool _channelEnabled[MAX_CHANNELS];
+    bool _systemEnabled;
     time_t _skipUntil[MAX_SCHEDULES];  // RAM-only: skip schedule until this time
 };
 
