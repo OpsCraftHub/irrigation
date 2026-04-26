@@ -233,6 +233,9 @@ void HomeAssistantIntegration::subscribe() {
     String modeTopic = buildTopic("mode/set");
     _mqttClient->subscribe(modeTopic.c_str());
 
+    // HA birth topic — republish discovery when HA restarts
+    _mqttClient->subscribe("homeassistant/status");
+
     // Schedule management
     String skipTopic = buildTopic("schedule/skip");
     _mqttClient->subscribe(skipTopic.c_str());
@@ -706,7 +709,19 @@ void HomeAssistantIntegration::handleMQTTMessage(char* topic, byte* payload, uns
     DEBUG_PRINTF("HomeAssistant: Message received [%s]: %s\n", topic, message.c_str());
 
     String topicStr = String(topic);
-    String baseTopic = String(MQTT_BASE_TOPIC) + "/";
+
+    // --- HA birth message: republish discovery when HA restarts ---
+    if (topicStr == "homeassistant/status" && message == "online") {
+        DEBUG_PRINTLN("HomeAssistant: HA birth detected, republishing discovery");
+        publishDiscovery();
+        publishState();
+        publishStatus();
+        publishChannelStates();
+        publishIndividualStatus();
+        publishSchedule();
+        publishModeState();
+        return;
+    }
 
     // --- Per-channel command: .../channel/{N}/command ---
     if (topicStr.indexOf("/channel/") >= 0 && topicStr.endsWith("/command")) {
