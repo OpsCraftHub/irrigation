@@ -1923,9 +1923,25 @@ String WiFiManager::getStatusPage() {
     // Add MQTT configuration form if not connected
     bool mqttConnected = _homeAssistant && _homeAssistant->isConnected();
     if (!mqttConnected) {
-        String mqttBroker = _homeAssistant ? _homeAssistant->getMqttBroker() : "";
-        uint16_t mqttPort = _homeAssistant ? _homeAssistant->getMqttPort() : 1883;
-        String mqttUser = _homeAssistant ? _homeAssistant->getMqttUser() : "";
+        String mqttBroker = "";
+        uint16_t mqttPort = 1883;
+        String mqttUser = "";
+        if (_homeAssistant) {
+            mqttBroker = _homeAssistant->getMqttBroker();
+            mqttPort = _homeAssistant->getMqttPort();
+            mqttUser = _homeAssistant->getMqttUser();
+        } else if (SPIFFS.exists(MQTT_CREDENTIALS_FILE)) {
+            File f = SPIFFS.open(MQTT_CREDENTIALS_FILE, "r");
+            if (f) {
+                StaticJsonDocument<512> cred;
+                if (!deserializeJson(cred, f)) {
+                    mqttBroker = cred["broker"] | "";
+                    mqttPort = cred["port"] | 1883;
+                    mqttUser = cred["user"] | "";
+                }
+                f.close();
+            }
+        }
 
         page += R"rawliteral(
         <div class="info" style="background: rgba(255,165,0,0.2); border-left: 4px solid #ff8800;">
@@ -2738,13 +2754,8 @@ void WiFiManager::startWebServer() {
         }
     });
 
-    // MQTT configuration save
+    // MQTT configuration save — works even when mqtt feature is currently disabled
     _webServer->on("/mqtt/save", HTTP_POST, [this]() {
-        if (!_homeAssistant) {
-            _webServer->send(500, "text/plain", "MQTT not initialized");
-            return;
-        }
-
         String broker = _webServer->hasArg("broker") ? _webServer->arg("broker") : "";
         uint16_t port = _webServer->hasArg("port") ? _webServer->arg("port").toInt() : 1883;
         String user = _webServer->hasArg("user") ? _webServer->arg("user") : "";
@@ -2755,23 +2766,49 @@ void WiFiManager::startWebServer() {
             return;
         }
 
-        // Save credentials
-        if (_homeAssistant->saveCredentials(broker, port, user, password)) {
-            _webServer->send(200, "application/json", "{\"success\":true,\"message\":\"Saved. Restarting...\"}");
-            delay(2000);
-            ESP.restart();
-        } else {
-            _webServer->send(500, "application/json", "{\"success\":false,\"message\":\"Failed to save\"}");
+        // Save credentials directly to SPIFFS (works whether HomeAssistant is initialized or not)
+        StaticJsonDocument<512> credDoc;
+        credDoc["broker"] = broker;
+        credDoc["port"] = port;
+        credDoc["user"] = user;
+        credDoc["password"] = password;
+
+        File credFile = SPIFFS.open(MQTT_CREDENTIALS_FILE, "w");
+        if (!credFile || serializeJson(credDoc, credFile) == 0) {
+            if (credFile) credFile.close();
+            _webServer->send(500, "application/json", "{\"success\":false,\"message\":\"Failed to save credentials\"}");
+            return;
         }
+        credFile.close();
+
+        // Enable mqtt feature flag and persist to config.json so it survives reboot
+        features.mqtt = true;
+
+        StaticJsonDocument<1024> cfgDoc;
+        File cfgRead = SPIFFS.open(CONFIG_FILE, "r");
+        if (cfgRead) {
+            deserializeJson(cfgDoc, cfgRead);
+            cfgRead.close();
+        }
+        cfgDoc["node_id"] = nodeId;
+        cfgDoc["role"] = nodeRole;
+        JsonObject feat = cfgDoc.containsKey("features") ? cfgDoc["features"] : cfgDoc.createNestedObject("features");
+        feat["mqtt"] = true;
+
+        File cfgWrite = SPIFFS.open(CONFIG_FILE, "w");
+        if (cfgWrite) {
+            serializeJson(cfgDoc, cfgWrite);
+            cfgWrite.close();
+        }
+
+        DEBUG_PRINTLN("WiFiManager: MQTT credentials saved, mqtt feature enabled");
+        _webServer->send(200, "application/json", "{\"success\":true,\"message\":\"Saved. Restarting...\"}");
+        delay(2000);
+        ESP.restart();
     });
 
-    // MQTT test connection
+    // MQTT test connection — works even when mqtt feature is currently disabled
     _webServer->on("/mqtt/test", HTTP_POST, [this]() {
-        if (!_homeAssistant) {
-            _webServer->send(500, "application/json", "{\"success\":false,\"message\":\"MQTT not initialized\"}");
-            return;
-        }
-
         String broker = _webServer->hasArg("broker") ? _webServer->arg("broker") : "";
         uint16_t port = _webServer->hasArg("port") ? _webServer->arg("port").toInt() : 1883;
         String user = _webServer->hasArg("user") ? _webServer->arg("user") : "";
@@ -2782,8 +2819,19 @@ void WiFiManager::startWebServer() {
             return;
         }
 
-        // Test connection
-        bool success = _homeAssistant->testConnection(broker, port, user, password);
+        // Test connection directly (no need for HomeAssistant object)
+        WiFiClient testClient;
+        PubSubClient testMqtt(testClient);
+        testMqtt.setServer(broker.c_str(), port);
+
+        bool success = false;
+        if (user.length() > 0) {
+            success = testMqtt.connect("irrigation_test", user.c_str(), password.c_str());
+        } else {
+            success = testMqtt.connect("irrigation_test");
+        }
+        if (success) testMqtt.disconnect();
+
         if (success) {
             _webServer->send(200, "application/json", "{\"success\":true,\"message\":\"Connection successful!\"}");
         } else {
@@ -2808,15 +2856,26 @@ void WiFiManager::startWebServer() {
     _webServer->on("/mqtt/remove", HTTP_POST, [this]() {
         DEBUG_PRINTLN("WiFiManager: MQTT credentials removal requested via web interface");
 
-        if (!_homeAssistant) {
-            _webServer->send(500, "application/json", "{\"success\":false,\"message\":\"MQTT not initialized\"}");
-            return;
-        }
-
         // Remove MQTT credentials file
         if (SPIFFS.exists(MQTT_CREDENTIALS_FILE)) {
             if (SPIFFS.remove(MQTT_CREDENTIALS_FILE)) {
                 DEBUG_PRINTLN("WiFiManager: MQTT credentials removed successfully");
+
+                // Disable mqtt feature flag in config.json
+                features.mqtt = false;
+                StaticJsonDocument<1024> cfgDoc;
+                File cfgRead = SPIFFS.open(CONFIG_FILE, "r");
+                if (cfgRead) {
+                    deserializeJson(cfgDoc, cfgRead);
+                    cfgRead.close();
+                }
+                cfgDoc["features"]["mqtt"] = false;
+                File cfgWrite = SPIFFS.open(CONFIG_FILE, "w");
+                if (cfgWrite) {
+                    serializeJson(cfgDoc, cfgWrite);
+                    cfgWrite.close();
+                }
+
                 _webServer->send(200, "application/json", "{\"success\":true,\"message\":\"MQTT credentials removed successfully\"}");
             } else {
                 DEBUG_PRINTLN("WiFiManager: Failed to remove MQTT credentials file");
