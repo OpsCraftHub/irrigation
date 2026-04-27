@@ -62,7 +62,8 @@ struct DedupEntry {
 
 class NodeManager {
 public:
-    NodeManager();
+    NodeManager(IrrigationController* controller, const char* nodeId,
+                uint8_t role, const char* nodeName = nullptr);
     ~NodeManager();
 
     // Component lifecycle
@@ -70,10 +71,7 @@ public:
     void update();
 
     // Configuration
-    void setRole(uint8_t role) { _role = role; }
     uint8_t getRole() const { return _role; }
-    void setController(IrrigationController* ctrl) { _controller = ctrl; }
-    void setNodeId(const char* id);
 
     // Master: register a slave peer by node_id
     bool addSlave(const char* nodeId, uint8_t baseVirtualCh);
@@ -92,7 +90,6 @@ public:
     uint8_t getSlaveCount() const { return _slaveCount; }
 
     // Auto-pairing (slave)
-    void setNodeName(const char* name);
     bool isPaired() const { return _paired; }
 
     // Auto-pairing (master)

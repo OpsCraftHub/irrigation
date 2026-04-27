@@ -11,7 +11,7 @@ This is an **ESP32-based irrigation controller** with Home Assistant integration
 - WiFi connectivity with auto-reconnect
 - MQTT/Home Assistant integration with auto-discovery
 - Automatic OTA firmware updates from GitHub
-- Non-volatile schedule storage (SPIFFS)
+- Non-volatile schedule storage (LittleFS)
 
 ## Build & Development Commands
 
@@ -30,7 +30,7 @@ pio run --target clean --environment esp32dev
 # Upload firmware to ESP32 (Board A)
 pio run --target upload --upload-port /dev/cu.usbserial-0001
 
-# Upload SPIFFS filesystem (config.json)
+# Upload LittleFS filesystem (config.json)
 pio run --target uploadfs
 
 # Serial monitor
@@ -70,8 +70,8 @@ The GitHub Actions workflow will automatically:
 **IrrigationController** (`src/IrrigationController.cpp`)
 - Core irrigation logic and state machine
 - Schedule management (up to 4 schedules)
-- Valve control with safety timeout (5-hour max)
-- SPIFFS-based persistent schedule storage
+- Valve control via polymorphic `Valve` interface (LocalValve for GPIO, RemoteValve for UDP)
+- LittleFS-based persistent schedule storage
 - Time-based execution engine
 
 **DisplayManager** (`src/DisplayManager.cpp`)
@@ -87,6 +87,13 @@ The GitHub Actions workflow will automatically:
 - Arduino OTA support
 - GitHub firmware version checking (daily)
 - Automatic firmware download and OTA update
+- WiFi setup portal and captive portal
+
+**WebAPIHandler** (`src/WebAPIHandler.cpp`)
+- All `/api/*` REST endpoints for the web UI
+- Schedule CRUD, channel control, node management
+- Delegates to IrrigationController/HomeAssistantIntegration/NodeManager
+- Registered on WiFiManager's WebServer instance
 
 **HomeAssistantIntegration** (`src/HomeAssistantIntegration.cpp`)
 - MQTT broker connection with auto-reconnect (every 5s)
@@ -99,10 +106,13 @@ The GitHub Actions workflow will automatically:
 
 ```
 main.cpp setup()
-  ├─> IrrigationController.begin()  // Load schedules from SPIFFS
-  ├─> DisplayManager.begin()        // Init LCD, configure buttons
-  ├─> WiFiManager.begin()           // Connect WiFi, sync NTP, setup OTA
-  └─> HomeAssistant.begin()         // Connect MQTT, publish discovery
+  ├─> IrrigationController(no deps)
+  ├─> DisplayManager(controller)
+  ├─> HomeAssistantIntegration(controller)
+  ├─> NodeManager(controller, nodeId, role, name)
+  ├─> WiFiManager(controller, ha, nodeManager)
+  ├─> WebAPIHandler(webServer, controller, ha, nodeManager)
+  └─> component.begin() on each
 
 main.cpp loop()
   ├─> IrrigationController.update() // Check schedules, update state
@@ -110,6 +120,21 @@ main.cpp loop()
   ├─> WiFiManager.update()          // Handle WiFi, OTA, time sync
   └─> HomeAssistant.update()        // MQTT connection, commands, status
 ```
+
+### Dependency Injection
+
+All required dependencies are passed via **constructor parameters**, not setter methods. This ensures missing wiring is caught at compile time rather than crashing at runtime with a null dereference. Optional dependencies (e.g., HomeAssistant when MQTT is disabled) are passed as `nullptr`.
+
+Setter methods are only used for **runtime callbacks and state** (e.g., `setRemoteValveCallback`, `setTimeUpdateCallback`, `setManualMode`), not for construction-time wiring.
+
+### Valve Abstraction
+
+Valve control uses a polymorphic interface (`include/Valve.h`):
+- `Valve` — abstract base with `activate(bool, uint16_t)` and `isActive()`
+- `LocalValve` — GPIO `digitalWrite` for on-board MOSFET channels
+- `RemoteValve` — dispatches via callback to NodeManager for UDP slave control
+
+IrrigationController holds a `Valve*` array and calls a uniform interface without knowing whether a channel is local or remote.
 
 ### State Machine
 
@@ -162,7 +187,9 @@ Located at `.github/workflows/build-firmware.yml`:
 5. On boot, displays new version on LCD
 6. Checks for updates, finds it's current, stops (no loop)
 
-### SPIFFS Storage
+### LittleFS Storage
+
+The project uses **LittleFS** (not SPIFFS). LittleFS provides journaling for power-loss resilience — a write interrupted by power loss will not corrupt the filesystem.
 
 Schedules are stored in JSON format at `/schedules.json`:
 ```json
@@ -304,7 +331,7 @@ This was a previous bug. The fix:
 1. Check time sync: Look for "NTP client not initialized" or "Firmware is up to date" on serial
 2. Verify time zone offset in Config.h
 3. Check weekday bitmask matches current day
-4. Ensure schedule is enabled in SPIFFS
+4. Ensure schedule is enabled in LittleFS
 
 ### MQTT Not Connecting
 
@@ -317,7 +344,7 @@ This was a previous bug. The fix:
 
 - Flash: ~600KB used of 4MB (firmware)
 - RAM: ~223KB used of 520KB (43%)
-- SPIFFS: 1.5MB available for storage
+- LittleFS: 1.5MB available for storage
 - Keep JSON buffers small (ArduinoJson StaticJsonDocument)
 - Avoid String concatenation in loops (use String::reserve())
 
@@ -425,7 +452,7 @@ This is the first of ~10 home electronics products built on ESP32 + Home Assista
 ### Reusable Design Patterns Across Products
 
 1. **ESP32 + Home Assistant core**: Master boards use ESP32-WROOM-32U, slave/satellite boards use ESP32-C3-MINI-1. WiFi, MQTT auto-discovery, OTA updates
-2. **Firmware architecture**: 4-component pattern (Controller, DisplayManager, WiFiManager, HomeAssistantIntegration) - copy and adapt per product
+2. **Firmware architecture**: Component pattern (Controller, DisplayManager, WiFiManager, WebAPIHandler, HomeAssistantIntegration) with constructor DI and polymorphic valve abstraction - copy and adapt per product
 3. **Power supply**: 24V/12V input → buck → 5V → LD1117V33 → 3.3V (standardize across products)
 4. **MOSFET switching pattern**: IRLZ44N + 100R gate + 10k pulldown + flyback diode - reuse for any solenoid/relay/motor load
 5. **PCB manufacturing**: JLCPCB for production boards, through-hole for hand assembly at small scale

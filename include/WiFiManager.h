@@ -11,22 +11,19 @@
 #include <Update.h>
 #include <WebServer.h>
 #include <DNSServer.h>
-#include <SPIFFS.h>
+#include <LittleFS.h>
 #include <ArduinoJson.h>
 #include "Config.h"
 
 class WiFiManager {
 public:
-    WiFiManager();
+    WiFiManager(class IrrigationController* controller,
+                class HomeAssistantIntegration* ha = nullptr,
+                class NodeManager* nm = nullptr);
     ~WiFiManager();
 
     // Initialization
     bool begin(const char* ssid = nullptr, const char* password = nullptr);
-
-    // Set controller reference for status page
-    void setController(class IrrigationController* controller) { _controller = controller; }
-    void setHomeAssistant(class HomeAssistantIntegration* ha) { _homeAssistant = ha; }
-    void setNodeManager(class NodeManager* nm) { _nodeManager = nm; }
 
     // Main update loop
     void update();
@@ -45,6 +42,7 @@ public:
     // Web status server (when connected)
     void startWebServer();
     void stopWebServer();
+    WebServer* getWebServer() const { return _webServer; }
 
     // Time synchronization
     time_t getCurrentTime();
@@ -73,7 +71,10 @@ private:
     // Credential management
     bool loadCredentials();
     bool saveCredentials(const String& ssid, const String& password);
+public:
     bool clearCredentials();
+    void setNodeManager(class NodeManager* nm) { _nodeManager = nm; }
+private:
 
     // Web server setup for config portal
     void setupWebServer();

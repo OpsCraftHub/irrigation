@@ -4,9 +4,10 @@
 // Static instance pointer for callback
 HomeAssistantIntegration* HomeAssistantIntegration::_instance = nullptr;
 
-HomeAssistantIntegration::HomeAssistantIntegration(IrrigationController* controller)
+HomeAssistantIntegration::HomeAssistantIntegration(IrrigationController* controller,
+                                                   NodeManager* nodeManager)
     : _controller(controller),
-      _nodeManager(nullptr),
+      _nodeManager(nodeManager),
       _wifiClient(nullptr),
       _mqttClient(nullptr),
       _port(MQTT_PORT),
@@ -75,12 +76,12 @@ bool HomeAssistantIntegration::begin(const char* broker, uint16_t port,
 }
 
 bool HomeAssistantIntegration::loadCredentials() {
-    if (!SPIFFS.exists(MQTT_CREDENTIALS_FILE)) {
+    if (!LittleFS.exists(MQTT_CREDENTIALS_FILE)) {
         DEBUG_PRINTLN("HomeAssistant: No credentials file found");
         return false;
     }
 
-    File file = SPIFFS.open(MQTT_CREDENTIALS_FILE, "r");
+    File file = LittleFS.open(MQTT_CREDENTIALS_FILE, "r");
     if (!file) {
         DEBUG_PRINTLN("HomeAssistant: Failed to open credentials file");
         return false;
@@ -116,7 +117,7 @@ bool HomeAssistantIntegration::saveCredentials(const String& broker, uint16_t po
     doc["user"] = user;
     doc["password"] = password;
 
-    File file = SPIFFS.open(MQTT_CREDENTIALS_FILE, "w");
+    File file = LittleFS.open(MQTT_CREDENTIALS_FILE, "w");
     if (!file) {
         DEBUG_PRINTLN("HomeAssistant: Failed to open credentials file for writing");
         return false;
@@ -209,10 +210,6 @@ void HomeAssistantIntegration::connectMQTT() {
         DEBUG_PRINTF("HomeAssistant: MQTT connection failed, rc=%d\n",
                      _mqttClient->state());
     }
-}
-
-void HomeAssistantIntegration::setNodeManager(NodeManager* nm) {
-    _nodeManager = nm;
 }
 
 // ============================================================================

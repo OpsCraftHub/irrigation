@@ -12,8 +12,9 @@ IrrigationController::IrrigationController()
     // Initialize status
     memset(&_status, 0, sizeof(SystemStatus));
 
-    // All local channels disabled by default (user enables via UI)
+    // Initialize valve pointers
     for (int i = 0; i < MAX_CHANNELS; i++) {
+        _valves[i] = nullptr;
         _channelEnabled[i] = false;
     }
 
@@ -36,23 +37,27 @@ IrrigationController::~IrrigationController() {
 bool IrrigationController::begin() {
     DEBUG_PRINTLN("IrrigationController: Initializing...");
 
-    // Initialize SPIFFS for storage first (needed for loading settings)
-    if (!SPIFFS.begin(true)) {
-        DEBUG_PRINTLN("IrrigationController: SPIFFS mount failed");
-        _status.lastError = "SPIFFS failed";
+    // Initialize LittleFS for storage first (needed for loading settings)
+    if (!LittleFS.begin(true)) {
+        DEBUG_PRINTLN("IrrigationController: LittleFS mount failed");
+        _status.lastError = "LittleFS failed";
         return false;
     }
 
     // Load channel settings (invert flags)
     loadChannelSettings();
 
-    // Configure local (GPIO) channel pins
+    // Create LocalValve objects for GPIO channels
     for (uint8_t i = 0; i < NUM_LOCAL_CHANNELS; i++) {
         pinMode(CHANNEL_PINS[i], OUTPUT);
-        // Set initial state: OFF (respecting invert setting)
-        digitalWrite(CHANNEL_PINS[i], _status.channelInverted[i] ? HIGH : LOW);
+        _valves[i] = new LocalValve(CHANNEL_PINS[i], _status.channelInverted[i]);
+        _valves[i]->activate(false, 0);  // Ensure off
     }
-    // Initialize status for ALL channels (local + virtual)
+    // Create RemoteValve placeholders for virtual channels (callback set later)
+    for (uint8_t i = NUM_LOCAL_CHANNELS; i < MAX_CHANNELS; i++) {
+        _valves[i] = new RemoteValve(i + 1);  // 1-based channel number
+    }
+    // Initialize status for ALL channels
     for (uint8_t i = 0; i < MAX_CHANNELS; i++) {
         _status.channelIrrigating[i] = false;
         _status.channelStartTime[i] = 0;
@@ -262,39 +267,41 @@ void IrrigationController::activateValve(uint8_t channel, bool state, bool manua
 
     uint8_t idx = channel - 1;
 
-    if (idx < NUM_LOCAL_CHANNELS) {
-        // Local GPIO channel
-        uint8_t pin = CHANNEL_PINS[idx];
-        bool inverted = _status.channelInverted[idx];
-        bool pinState = inverted ? !state : state;
-        digitalWrite(pin, pinState ? HIGH : LOW);
-        DEBUG_PRINTF("IrrigationController: Channel %d (GPIO %d) %s (inv:%d)\n",
-                     channel, pin, state ? "ON" : "OFF", inverted);
+    // Virtual (remote) channels: scheduled starts are handled by the slave locally
+    if (idx >= NUM_LOCAL_CHANNELS && !manual && state) {
+        DEBUG_PRINTF("IrrigationController: Channel %d (remote) scheduled start — slave handles locally\n", channel);
+        return;
+    }
+
+    if (_valves[idx]) {
+        uint16_t duration = _status.channelDuration[idx];
+        _valves[idx]->activate(state, duration);
+        DEBUG_PRINTF("IrrigationController: Channel %d %s\n", channel, state ? "ON" : "OFF");
     } else {
-        // Virtual (remote) channel
-        if (!manual && state) {
-            // Scheduled start on virtual channel — slave handles it independently.
-            // Don't send CMD_START; the slave runs the schedule locally.
-            DEBUG_PRINTF("IrrigationController: Channel %d (remote) scheduled start — slave handles locally\n", channel);
-            return;
-        }
-        // Manual start/stop or any stop — route through callback
-        if (_remoteValveCallback) {
-            uint16_t duration = _status.channelDuration[idx];
-            _remoteValveCallback(channel, state, duration);
-            DEBUG_PRINTF("IrrigationController: Channel %d (remote) %s (manual)\n",
-                         channel, state ? "ON" : "OFF");
-        } else {
-            DEBUG_PRINTF("IrrigationController: Channel %d is virtual but no remote callback set\n", channel);
-        }
+        DEBUG_PRINTF("IrrigationController: Channel %d has no valve configured\n", channel);
+    }
+}
+
+// Valve access
+Valve* IrrigationController::getValve(uint8_t channel) const {
+    if (channel < 1 || channel > MAX_CHANNELS) return nullptr;
+    return _valves[channel - 1];
+}
+
+void IrrigationController::setRemoteValveCallback(RemoteValveCallback cb) {
+    // Set callback on all RemoteValve instances
+    for (uint8_t i = NUM_LOCAL_CHANNELS; i < MAX_CHANNELS; i++) {
+        RemoteValve* rv = static_cast<RemoteValve*>(_valves[i]);
+        if (rv) rv->setCallback(cb);
     }
 }
 
 // Helper methods
 uint8_t IrrigationController::getChannelPin(uint8_t channel) const {
     if (channel < 1 || channel > MAX_CHANNELS) return 0;
-    if (channel - 1 >= NUM_LOCAL_CHANNELS) return 0;  // Virtual channel — no GPIO pin
-    return CHANNEL_PINS[channel - 1];
+    LocalValve* lv = (channel - 1 < NUM_LOCAL_CHANNELS)
+        ? static_cast<LocalValve*>(_valves[channel - 1]) : nullptr;
+    return lv ? lv->getPin() : 0;
 }
 
 bool IrrigationController::isChannelIrrigating(uint8_t channel) const {
@@ -542,7 +549,7 @@ void IrrigationController::getSchedules(IrrigationSchedule* schedules, uint8_t& 
 }
 
 bool IrrigationController::saveSchedules() {
-    DEBUG_PRINTLN("IrrigationController: Saving schedules to SPIFFS");
+    DEBUG_PRINTLN("IrrigationController: Saving schedules to LittleFS");
 
     DynamicJsonDocument doc(2048);  // Increased size for 16 schedules
     JsonArray array = doc.createNestedArray("schedules");
@@ -559,7 +566,7 @@ bool IrrigationController::saveSchedules() {
         }
     }
 
-    File file = SPIFFS.open(SCHEDULE_FILE, "w");
+    File file = LittleFS.open(SCHEDULE_FILE, "w");
     if (!file) {
         DEBUG_PRINTLN("IrrigationController: Failed to open schedule file for writing");
         return false;
@@ -573,14 +580,14 @@ bool IrrigationController::saveSchedules() {
 }
 
 bool IrrigationController::loadSchedules() {
-    DEBUG_PRINTLN("IrrigationController: Loading schedules from SPIFFS");
+    DEBUG_PRINTLN("IrrigationController: Loading schedules from LittleFS");
 
-    if (!SPIFFS.exists(SCHEDULE_FILE)) {
+    if (!LittleFS.exists(SCHEDULE_FILE)) {
         DEBUG_PRINTLN("IrrigationController: Schedule file does not exist");
         return false;
     }
 
-    File file = SPIFFS.open(SCHEDULE_FILE, "r");
+    File file = LittleFS.open(SCHEDULE_FILE, "r");
     if (!file) {
         DEBUG_PRINTLN("IrrigationController: Failed to open schedule file");
         return false;
@@ -628,12 +635,12 @@ bool IrrigationController::isChannelInverted(uint8_t channel) const {
 
 void IrrigationController::setChannelInverted(uint8_t channel, bool inverted) {
     if (channel < 1 || channel > MAX_CHANNELS) return;
-    _status.channelInverted[channel - 1] = inverted;
+    uint8_t idx = channel - 1;
+    _status.channelInverted[idx] = inverted;
 
-    // Update the pin state immediately if not irrigating (local channels only)
-    if (channel - 1 < NUM_LOCAL_CHANNELS && !_status.channelIrrigating[channel - 1]) {
-        uint8_t pin = CHANNEL_PINS[channel - 1];
-        digitalWrite(pin, inverted ? HIGH : LOW);  // OFF state
+    // Update the valve's invert setting (local channels only)
+    if (idx < NUM_LOCAL_CHANNELS && _valves[idx]) {
+        static_cast<LocalValve*>(_valves[idx])->setInverted(inverted);
     }
 
     saveChannelSettings();
@@ -665,7 +672,7 @@ bool IrrigationController::saveChannelSettings() {
         enabled.add(_channelEnabled[i]);
     }
 
-    File file = SPIFFS.open("/channel_settings.json", "w");
+    File file = LittleFS.open("/channel_settings.json", "w");
     if (!file) {
         DEBUG_PRINTLN("IrrigationController: Failed to open channel settings for writing");
         return false;
@@ -683,12 +690,12 @@ bool IrrigationController::loadChannelSettings() {
         _status.channelInverted[i] = false;
     }
 
-    if (!SPIFFS.exists("/channel_settings.json")) {
+    if (!LittleFS.exists("/channel_settings.json")) {
         DEBUG_PRINTLN("IrrigationController: No channel settings file, using defaults");
         return false;
     }
 
-    File file = SPIFFS.open("/channel_settings.json", "r");
+    File file = LittleFS.open("/channel_settings.json", "r");
     if (!file) {
         DEBUG_PRINTLN("IrrigationController: Failed to open channel settings");
         return false;

@@ -2,9 +2,10 @@
 #define IRRIGATION_CONTROLLER_H
 
 #include <Arduino.h>
-#include <SPIFFS.h>
+#include <LittleFS.h>
 #include <ArduinoJson.h>
 #include "Config.h"
+#include "Valve.h"
 
 // Callback for routing valve commands to remote nodes
 typedef void (*RemoteValveCallback)(uint8_t channel, bool state, uint16_t duration);
@@ -62,8 +63,9 @@ public:
     bool saveChannelSettings();
     bool loadChannelSettings();
 
-    // Remote valve support (ESP-NOW virtual channels)
-    void setRemoteValveCallback(RemoteValveCallback cb) { _remoteValveCallback = cb; }
+    // Valve access (for setting remote callbacks after construction)
+    Valve* getValve(uint8_t channel) const;
+    void setRemoteValveCallback(RemoteValveCallback cb);
     void setRemoteChannelStatus(uint8_t channel, bool irrigating, uint16_t remainingSec);
 
     // Time management
@@ -88,7 +90,7 @@ private:
     unsigned long _lastScheduleCheck;
     unsigned long _irrigationStartMillis;
     uint16_t _currentDurationMinutes;
-    RemoteValveCallback _remoteValveCallback = nullptr;
+    Valve* _valves[MAX_CHANNELS];
     bool _channelEnabled[MAX_CHANNELS];
     bool _systemEnabled;
     time_t _skipUntil[MAX_SCHEDULES];  // RAM-only: skip schedule until this time

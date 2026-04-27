@@ -10,7 +10,7 @@
  * - NTP time synchronization with RTC fallback
  * - Automatic OTA updates from GitHub
  * - Home Assistant MQTT integration with auto-discovery
- * - Non-volatile storage for schedules (SPIFFS)
+ * - Non-volatile storage for schedules (LittleFS)
  * - Runtime feature flags from config.json
  */
 
@@ -23,6 +23,7 @@
 #include "WiFiManager.h"
 #include "HomeAssistantIntegration.h"
 #include "NodeManager.h"
+#include "WebAPIHandler.h"
 
 // Global objects
 IrrigationController* irrigationController = nullptr;
@@ -88,7 +89,7 @@ void setup() {
         digitalWrite(LED_BLUE, LOW);    // Blue LED off initially
     }
 
-    // Load configuration from SPIFFS (including feature flags)
+    // Load configuration from LittleFS (including feature flags)
     loadConfiguration();
 
     // Initialize irrigation controller — always init (core function)
@@ -123,11 +124,7 @@ void setup() {
 
     // Initialize WiFi manager — always init (needed for NTP, OTA, web)
     DEBUG_PRINTLN("Initializing WiFi Manager...");
-    wifiManager = new WiFiManager();
-    wifiManager->setController(irrigationController);
-    if (features.mqtt && homeAssistant) {
-        wifiManager->setHomeAssistant(homeAssistant);
-    }
+    wifiManager = new WiFiManager(irrigationController, homeAssistant);
 
     // Try to connect with saved credentials or start config portal
     if (!wifiManager->begin()) {
@@ -157,16 +154,9 @@ void setup() {
     // Initialize NodeManager (UDP + mDNS) — only if multi_node feature enabled
     if (features.multi_node) {
         DEBUG_PRINTLN("Initializing NodeManager (UDP + mDNS)...");
-        nodeManager = new NodeManager();
-        nodeManager->setController(irrigationController);
-        nodeManager->setNodeId(nodeId.c_str());
-
-        if (nodeRole == "master") {
-            nodeManager->setRole(NODE_ROLE_MASTER);
-        } else {
-            nodeManager->setRole(NODE_ROLE_SLAVE);
-            nodeManager->setNodeName(nodeName.c_str());
-        }
+        uint8_t nmRole = (nodeRole == "master") ? NODE_ROLE_MASTER : NODE_ROLE_SLAVE;
+        nodeManager = new NodeManager(irrigationController, nodeId.c_str(),
+                                      nmRole, nodeName.c_str());
 
         if (nodeManager->begin()) {
             if (nodeRole == "master") {
@@ -190,6 +180,15 @@ void setup() {
         }
     } else {
         DEBUG_PRINTLN("multi_node feature disabled, skipping NodeManager");
+    }
+
+    // Initialize Web API handler (registers /api/* routes on web server)
+    if (!wifiManager->isConfigMode() && wifiManager->getWebServer()) {
+        WebAPIHandler* webApi = new WebAPIHandler(
+            wifiManager->getWebServer(), irrigationController,
+            homeAssistant, nodeManager, wifiManager);
+        webApi->begin();
+        DEBUG_PRINTLN("WebAPIHandler: API routes registered");
     }
 
     // Show initial status
@@ -365,21 +364,21 @@ String nodeIdToDisplayName(const String& id) {
 }
 
 void loadConfiguration() {
-    DEBUG_PRINTLN("Loading configuration from SPIFFS...");
+    DEBUG_PRINTLN("Loading configuration from LittleFS...");
 
-    // Initialize SPIFFS (format if needed)
-    DEBUG_PRINTLN("Mounting SPIFFS...");
-    if (!SPIFFS.begin(false)) {
-        DEBUG_PRINTLN("SPIFFS not formatted, formatting now...");
-        if (!SPIFFS.begin(true)) {
-            DEBUG_PRINTLN("ERROR: Failed to format/mount SPIFFS");
+    // Initialize LittleFS (format if needed)
+    DEBUG_PRINTLN("Mounting LittleFS...");
+    if (!LittleFS.begin(false)) {
+        DEBUG_PRINTLN("LittleFS not formatted, formatting now...");
+        if (!LittleFS.begin(true)) {
+            DEBUG_PRINTLN("ERROR: Failed to format/mount LittleFS");
             return;
         }
-        DEBUG_PRINTLN("SPIFFS formatted successfully");
+        DEBUG_PRINTLN("LittleFS formatted successfully");
     }
 
     // Auto-generate unique node_id from MAC if no config exists
-    if (!SPIFFS.exists(CONFIG_FILE)) {
+    if (!LittleFS.exists(CONFIG_FILE)) {
         DEBUG_PRINTLN("No configuration file found, using defaults");
         uint8_t mac[6];
         esp_efuse_mac_get_default(mac);
@@ -392,7 +391,7 @@ void loadConfiguration() {
     }
 
     // Load config file
-    File file = SPIFFS.open(CONFIG_FILE, "r");
+    File file = LittleFS.open(CONFIG_FILE, "r");
     if (!file) {
         DEBUG_PRINTLN("Failed to open config file");
         return;

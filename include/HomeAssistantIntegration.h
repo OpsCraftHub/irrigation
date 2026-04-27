@@ -5,7 +5,7 @@
 #include <PubSubClient.h>
 #include <WiFi.h>
 #include <ArduinoJson.h>
-#include <SPIFFS.h>
+#include <LittleFS.h>
 #include "Config.h"
 #include "IrrigationController.h"
 
@@ -13,7 +13,8 @@ class NodeManager;
 
 class HomeAssistantIntegration {
 public:
-    HomeAssistantIntegration(IrrigationController* controller);
+    HomeAssistantIntegration(IrrigationController* controller,
+                             NodeManager* nodeManager = nullptr);
     ~HomeAssistantIntegration();
 
     // Initialization
@@ -22,8 +23,8 @@ public:
 
     // MQTT credentials management
     bool loadCredentials();
-    bool saveCredentials(const String& broker, uint16_t port, const String& user, const String& password);
-    bool testConnection(const String& broker, uint16_t port, const String& user, const String& password);
+    static bool saveCredentials(const String& broker, uint16_t port, const String& user, const String& password);
+    static bool testConnection(const String& broker, uint16_t port, const String& user, const String& password);
 
     // Get current config
     String getMqttBroker() const { return _broker; }
@@ -48,7 +49,7 @@ public:
     void refreshDiscovery();
 
     // NodeManager integration (for slave forwarding)
-    void setNodeManager(NodeManager* nm);
+    void setNodeManager(NodeManager* nm) { _nodeManager = nm; }
 
     // System state
     bool isSystemEnabled() const { return _systemEnabled; }

@@ -1,11 +1,12 @@
 #include "NodeManager.h"
 #include "IrrigationController.h"
-#include <SPIFFS.h>
+#include <LittleFS.h>
 #include <ArduinoJson.h>
 
-NodeManager::NodeManager()
-    : _role(NODE_ROLE_MASTER),
-      _controller(nullptr),
+NodeManager::NodeManager(IrrigationController* controller, const char* nodeId,
+                         uint8_t role, const char* nodeName)
+    : _role(role),
+      _controller(controller),
       _seq(0),
       _slaveCount(0),
       _masterPort(NODE_UDP_PORT),
@@ -21,30 +22,20 @@ NodeManager::NodeManager()
       _assignedVirtualCh(0),
       _lastPairAttempt(0) {
     memset(_nodeId, 0, sizeof(_nodeId));
-    strncpy(_nodeId, DEFAULT_NODE_ID, sizeof(_nodeId) - 1);
+    strncpy(_nodeId, nodeId ? nodeId : DEFAULT_NODE_ID, sizeof(_nodeId) - 1);
     memset(_slaves, 0, sizeof(_slaves));
     memset(_masterNodeId, 0, sizeof(_masterNodeId));
     memset(_outbox, 0, sizeof(_outbox));
     memset(_dedup, 0, sizeof(_dedup));
     memset(&_pendingPair, 0, sizeof(_pendingPair));
     memset(_nodeName, 0, sizeof(_nodeName));
-    strncpy(_nodeName, "Slave", sizeof(_nodeName) - 1);
+    strncpy(_nodeName, nodeName ? nodeName : "Slave", sizeof(_nodeName) - 1);
 }
 
 NodeManager::~NodeManager() {
     if (_initialized) {
         _udp.stop();
     }
-}
-
-void NodeManager::setNodeId(const char* id) {
-    strncpy(_nodeId, id, sizeof(_nodeId) - 1);
-    _nodeId[sizeof(_nodeId) - 1] = '\0';
-}
-
-void NodeManager::setNodeName(const char* name) {
-    strncpy(_nodeName, name, sizeof(_nodeName) - 1);
-    _nodeName[sizeof(_nodeName) - 1] = '\0';
 }
 
 bool NodeManager::begin() {
@@ -57,7 +48,7 @@ bool NodeManager::begin() {
 
     _initialized = true;
 
-    // Load pairing state from SPIFFS
+    // Load pairing state from LittleFS
     if (_role == NODE_ROLE_MASTER) {
         loadPairedSlaves();
     } else {
@@ -892,9 +883,9 @@ void NodeManager::handleScheduleSet(IPAddress senderIp, uint16_t senderPort,
         // Enable slot first if needed, then update — single save at the end
         _controller->enableSchedule(index, true);
         _controller->updateSchedule(index, localCh, hour, minute, duration, weekdays);
-        // updateSchedule() saves to SPIFFS
+        // updateSchedule() saves to LittleFS
     } else {
-        // Only remove if the slot is actually in use (avoid pointless SPIFFS writes)
+        // Only remove if the slot is actually in use (avoid pointless LittleFS writes)
         IrrigationSchedule existing = _controller->getSchedule(index);
         if (existing.enabled) {
             DEBUG_PRINTF("NodeManager: SCHEDULE_SET index=%d CLEAR\n", index);
@@ -1060,7 +1051,7 @@ void NodeManager::acceptPendingPair() {
         peer->last_seen = millis();
     }
 
-    // Persist to SPIFFS
+    // Persist to LittleFS
     savePairedSlaves();
 
     // Send PAIR_ACCEPT
@@ -1205,7 +1196,7 @@ void NodeManager::handlePairReject(const IrrigationMsg& msg) {
 }
 
 // ============================================================================
-// Auto-Pairing: SPIFFS persistence
+// Auto-Pairing: LittleFS persistence
 // ============================================================================
 
 void NodeManager::savePairedSlaves() {
@@ -1218,23 +1209,23 @@ void NodeManager::savePairedSlaves() {
         slave["num_channels"] = _slaves[i].num_channels;
     }
 
-    File file = SPIFFS.open(PAIRED_SLAVES_FILE, "w");
+    File file = LittleFS.open(PAIRED_SLAVES_FILE, "w");
     if (!file) {
         DEBUG_PRINTLN("NodeManager: Failed to open paired_slaves.json for writing");
         return;
     }
     serializeJson(doc, file);
     file.close();
-    DEBUG_PRINTF("NodeManager: Saved %d paired slaves to SPIFFS\n", _slaveCount);
+    DEBUG_PRINTF("NodeManager: Saved %d paired slaves to LittleFS\n", _slaveCount);
 }
 
 void NodeManager::loadPairedSlaves() {
-    if (!SPIFFS.exists(PAIRED_SLAVES_FILE)) {
+    if (!LittleFS.exists(PAIRED_SLAVES_FILE)) {
         DEBUG_PRINTLN("NodeManager: No paired_slaves.json found");
         return;
     }
 
-    File file = SPIFFS.open(PAIRED_SLAVES_FILE, "r");
+    File file = LittleFS.open(PAIRED_SLAVES_FILE, "r");
     if (!file) {
         DEBUG_PRINTLN("NodeManager: Failed to open paired_slaves.json");
         return;
@@ -1277,25 +1268,25 @@ void NodeManager::savePairedMaster() {
     doc["master_id"] = _masterNodeId;
     doc["virtual_channel"] = _assignedVirtualCh;
 
-    File file = SPIFFS.open(PAIRED_MASTER_FILE, "w");
+    File file = LittleFS.open(PAIRED_MASTER_FILE, "w");
     if (!file) {
         DEBUG_PRINTLN("NodeManager: Failed to open paired_master.json for writing");
         return;
     }
     serializeJson(doc, file);
     file.close();
-    DEBUG_PRINTF("NodeManager: Saved pairing to SPIFFS (master=%s, vch=%d)\n",
+    DEBUG_PRINTF("NodeManager: Saved pairing to LittleFS (master=%s, vch=%d)\n",
                  _masterNodeId, _assignedVirtualCh);
 }
 
 void NodeManager::loadPairedMaster() {
-    if (!SPIFFS.exists(PAIRED_MASTER_FILE)) {
+    if (!LittleFS.exists(PAIRED_MASTER_FILE)) {
         DEBUG_PRINTLN("NodeManager: No paired_master.json found — will request pairing");
         _paired = false;
         return;
     }
 
-    File file = SPIFFS.open(PAIRED_MASTER_FILE, "r");
+    File file = LittleFS.open(PAIRED_MASTER_FILE, "r");
     if (!file) {
         DEBUG_PRINTLN("NodeManager: Failed to open paired_master.json");
         _paired = false;
