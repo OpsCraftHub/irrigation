@@ -173,11 +173,14 @@ void IrrigationController::updateIrrigationState() {
         return;
     }
 
-    unsigned long elapsedMinutes = (millis() - _irrigationStartMillis) / 60000;
-
-    if (elapsedMinutes >= _currentDurationMinutes) {
-        DEBUG_PRINTLN("IrrigationController: Irrigation cycle complete");
-        stopIrrigation();
+    unsigned long now = millis();
+    for (uint8_t i = 0; i < MAX_CHANNELS; i++) {
+        if (!_status.channelIrrigating[i]) continue;
+        unsigned long elapsed = (now - _status.channelStartTime[i]) / 60000;
+        if (elapsed >= _status.channelDuration[i]) {
+            DEBUG_PRINTF("IrrigationController: Channel %d cycle complete\n", i + 1);
+            stopIrrigation(i + 1);
+        }
     }
 }
 
@@ -203,13 +206,13 @@ void IrrigationController::checkSchedules() {
     for (int i = 0; i < MAX_SCHEDULES; i++) {
         if (_schedules[i].enabled && shouldRunSchedule(_schedules[i], now)) {
             // Check skip-until (RAM only, resets on reboot)
-            if (_skipUntil[i] > 0 && now <= _skipUntil[i]) {
-                DEBUG_PRINTF("IrrigationController: Schedule %d skipped by user\n", i);
-                // Clear skip after the minute passes so it doesn't block forever
-                if (now > _skipUntil[i] - 60) {
-                    _skipUntil[i] = 0;
+            if (_skipUntil[i] > 0) {
+                if (now <= _skipUntil[i]) {
+                    DEBUG_PRINTF("IrrigationController: Schedule %d skipped by user\n", i);
+                    continue;
                 }
-                continue;
+                // Clear expired skip (we're past the skip window)
+                _skipUntil[i] = 0;
             }
 
             uint8_t channel = _schedules[i].channel;

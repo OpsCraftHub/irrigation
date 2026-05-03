@@ -162,8 +162,19 @@ void DisplayManager::drawStatusScreen() {
             snprintf(line2, 17, "Nxt Ch%d %02d:%02d  ",
                 nextCh, nextInfo.tm_hour, nextInfo.tm_min);
         } else {
-            // Could be no schedules or all skipped
-            snprintf(line2, 17, "Skipped/None    ");
+            // Check if any schedules are skipped vs none existing
+            bool anySkipped = false;
+            for (uint8_t i = 0; i < MAX_SCHEDULES; i++) {
+                if (_controller->isScheduleSkipped(i)) {
+                    anySkipped = true;
+                    break;
+                }
+            }
+            if (anySkipped) {
+                snprintf(line2, 17, "Next: Skipped   ");
+            } else {
+                snprintf(line2, 17, "No schedules    ");
+            }
         }
     }
 
@@ -232,9 +243,13 @@ void DisplayManager::drawScheduleScreen() {
             char timeStr[10];
             sprintf(timeStr, "%02d:%02d", schedules[idx].hour, schedules[idx].minute);
             _lcd->print(timeStr);
-            _lcd->print(" ");
-            _lcd->print(schedules[idx].durationMinutes);
-            _lcd->print("m");
+            if (_controller->isScheduleSkipped(idx)) {
+                _lcd->print(" SKIP");
+            } else {
+                _lcd->print(" ");
+                _lcd->print(schedules[idx].durationMinutes);
+                _lcd->print("m");
+            }
         } else {
             _lcd->print("Disabled");
         }
